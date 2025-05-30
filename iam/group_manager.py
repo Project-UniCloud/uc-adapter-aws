@@ -11,7 +11,6 @@ def _normalize_name(name: str) -> str:
         'Ó': 'O', 'Ś': 'S', 'Ź': 'Z', 'Ż': 'Z',
         ' ': '-', '_': '-'
     }
-    # Zamiana wszystkich znaków z mapy
     for char, replacement in char_map.items():
         name = name.replace(char, replacement)
     return name
@@ -23,7 +22,6 @@ class GroupManager:
     def create_group_with_leaders(self, resource_type: str, leaders: list[str], group_name: str):
         group_name = _normalize_name(group_name)
 
-        # 1. Tworzenie grupy
         try:
             self.iam_client.create_group(GroupName=group_name)
             print(f"Grupa '{group_name}' została utworzona.")
@@ -33,7 +31,6 @@ class GroupManager:
             else:
                 raise
 
-        # 2. Przypisywanie polityki do grupy
         policy_path = os.path.join('config', 'policies', f"student_{resource_type}_policy.json")
         if not os.path.isfile(policy_path):
             raise FileNotFoundError(f"Plik polityki '{policy_path}' nie istnieje.")
@@ -70,7 +67,6 @@ class GroupManager:
             print(f"Błąd podczas przypisywania polityki zmiany hasła do grupy: {e}")
             raise
 
-        # 3. Tworzenie użytkowników prowadzących i przypisywanie ich do grupy
         for leader in leaders:
             try:
                 leader = _normalize_name(leader)
@@ -82,7 +78,6 @@ class GroupManager:
                 else:
                     raise
 
-            # Przypisywanie polityki do użytkownika
             leader_policy_path = os.path.join('config', 'policies', f'leader_{resource_type}_policy.json')
             if not os.path.isfile(leader_policy_path):
                 raise FileNotFoundError(f"Plik polityki '{leader_policy_path}' nie istnieje.")
@@ -103,7 +98,6 @@ class GroupManager:
                 print(f"Błąd podczas przypisywania polityki do użytkownika '{leader}': {e}")
                 raise
 
-            # Dodawanie użytkownika do grupy
             try:
                 self.iam_client.add_user_to_group(
                     GroupName=group_name,

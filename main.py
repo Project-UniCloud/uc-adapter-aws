@@ -22,7 +22,7 @@ class CloudAdapterServicer(adapter_interface_pb2_grpc.CloudAdapterServicer):
         response.isHealthy = True
         return response
 
-    def CreateUser(self, request, context):
+    def CreateUsers(self, request, context):
         new_user_name = "boto3-generated-user"
         try:
             response = iam.create_user(UserName=new_user_name)

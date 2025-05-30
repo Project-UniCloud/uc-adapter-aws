@@ -3,8 +3,6 @@ from botocore.exceptions import ClientError
 
 
 def _normalize_username(name: str) -> str:
-    """Normalizuje nazwę użytkownika: zamienia polskie znaki i specjalne znaki na bezpieczne odpowiedniki."""
-    # Słownik zamiany polskich znaków
     char_map = {
         'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l', 'ń': 'n',
         'ó': 'o', 'ś': 's', 'ź': 'z', 'ż': 'z',
@@ -12,7 +10,6 @@ def _normalize_username(name: str) -> str:
         'Ó': 'O', 'Ś': 'S', 'Ź': 'Z', 'Ż': 'Z',
         ' ': '-', '_': '-'
     }
-    # Zamiana wszystkich znaków z mapy
     for char, replacement in char_map.items():
         name = name.replace(char, replacement)
     return name
@@ -23,15 +20,12 @@ class UserManager:
         self.iam_client = boto3.client('iam')
 
     def create_users_for_group(self, users: list[str], group_name: str) -> str:
-        created_users = []  # Śledzi nowo utworzonych użytkowników do rollbacku
-
+        created_users = []
         for user in users:
-            # Generowanie i normalizacja nazwy użytkownika
             raw_username = f"{user}-{group_name}"
             username = _normalize_username(raw_username)
 
             try:
-                # Tworzenie użytkownika
                 self.iam_client.create_user(
                     UserName=username,
                     Tags=[{'Key': 'Group', 'Value': group_name}]
@@ -39,7 +33,6 @@ class UserManager:
                 created_users.append(username)
                 print(f"Utworzono użytkownika '{username}' z tagiem 'Group': '{group_name}'")
 
-                # Ustawienie hasła i wymuszenie zmiany przy pierwszym logowaniu
                 self.iam_client.create_login_profile(
                     UserName=username,
                     Password=group_name,
@@ -47,7 +40,6 @@ class UserManager:
                 )
                 print(f"Ustawiono hasło '{group_name}' dla użytkownika '{username}' (wymagana zmiana przy logowaniu)")
 
-                # Dodawanie użytkownika do grupy
                 self.iam_client.add_user_to_group(
                     GroupName=group_name,
                     UserName=username
@@ -62,7 +54,6 @@ class UserManager:
                     continue
                 elif error_code == 'NoSuchEntity' and 'group' in e.response['Error']['Message'].lower():
                     print(f"Grupa '{group_name}' nie istnieje!")
-                    # Rollback dla częściowo utworzonych użytkowników
                     for created_user in created_users:
                         try:
                             self.iam_client.delete_login_profile(UserName=created_user)
@@ -75,7 +66,6 @@ class UserManager:
                             print(f"Błąd podczas rollbacku dla '{created_user}': {rollback_error}")
                     return f"Operacja przerwana: Grupa '{group_name}' nie istnieje"
 
-                # Rollback dla innych błędów
                 print(f"Błąd: {e} - Wycofywanie zmian dla {username}")
                 for created_user in created_users:
                     try:
