@@ -1,58 +1,76 @@
-import os
-from concurrent import futures
-
-import boto3
 import grpc
+from concurrent import futures
 from dotenv import load_dotenv
+from botocore.exceptions import ClientError
 
-import adapter_interface_pb2
-import adapter_interface_pb2_grpc
+import adapter_interface_pb2_grpc as pb2_grpc
+import adapter_interface_pb2 as pb2
+
+from iam.group_manager import GroupManager
+from iam.user_manager import UserManager
 
 load_dotenv()
-session = boto3.Session(
-    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-    region_name=os.getenv("AWS_REGION")
-)
 
-iam = session.client('iam')
+group_manager = GroupManager()
 
 
-class CloudAdapterServicer(adapter_interface_pb2_grpc.CloudAdapterServicer):
+class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
+    def __init__(self):
+        self.user_manager = UserManager()
+
     def GetStatus(self, request, context):
-        response = adapter_interface_pb2.StatusResponse()
+        response = pb2.StatusResponse()
         response.isHealthy = True
         return response
 
-    def CreateUser(self, request, context):
-        new_user_name = "boto3-generated-user"
+    def CreateUsersForGroup(self, request, context):
         try:
-            response = iam.create_user(UserName=new_user_name)
-            print(f"✅ Użytkownik '{new_user_name}' został utworzony.")
-            print("Szczegóły:", response['User'])
-
-            user_response = adapter_interface_pb2.UserCreatedResponse()
-            user_response.id = response['User']['UserName']
-            return user_response
-
-        except iam.exceptions.EntityAlreadyExistsException:
-            print(f"⚠️ Użytkownik '{new_user_name}' już istnieje.")
-            user_response = adapter_interface_pb2.UserCreatedResponse()
-            user_response.id = new_user_name
-            return user_response
+            result_msg = self.user_manager.create_users_for_group(
+                users=list(request.users),
+                group_name=request.groupName
+            )
+            response = pb2.CreateUsersForGroupResponse()
+            response.message = result_msg
+            return response
         except Exception as e:
-            print(f"❌ Błąd podczas tworzenia użytkownika: {e}")
+            print(f"❌ Błąd podczas tworzenia użytkowników: {e}")
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Błąd podczas tworzenia użytkownika: {e}")
-            return adapter_interface_pb2.UserCreatedResponse()
+            context.set_details(str(e))
+            return pb2.CreateUsersForGroupResponse()
+
+    def CreateGroupWithLeaders(self, request, context):
+        try:
+            group_manager.create_group_with_leaders(
+                resource_type=request.resourceType,
+                leaders=list(request.leaders),
+                group_name=request.groupName
+            )
+            response = pb2.GroupCreatedResponse()
+            response.groupName = request.groupName
+            return response
+        except FileNotFoundError as e:
+            print(f"❌ Brak pliku: {e}")
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details(str(e))
+            return pb2.GroupCreatedResponse()
+        except ClientError as e:
+            print(f"❌ Błąd AWS: {e}")
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Błąd AWS: {e}")
+            return pb2.GroupCreatedResponse()
+        except Exception as e:
+            print(f"❌ Inny błąd: {e}")
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Nieoczekiwany błąd: {e}")
+            return pb2.GroupCreatedResponse()
 
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-    adapter_interface_pb2_grpc.add_CloudAdapterServicer_to_server(CloudAdapterServicer(), server)
+    pb2_grpc.add_CloudAdapterServicer_to_server(CloudAdapterServicer(), server)
     server.add_insecure_port('[::]:50051')
     server.start()
-    print("Serwer działa na porcie 50051...")
+    print("🚀 Serwer działa na porcie 50051...")
     server.wait_for_termination()
 
 
