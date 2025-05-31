@@ -2,7 +2,7 @@
 
 set -e
 
-PROTO_DIR="protos/proto"
+PROTO_DIR="uc-protos/proto"
 PROTO_FILE="${PROTO_DIR}/adapter_interface.proto"
 OUT_DIR="."
 
