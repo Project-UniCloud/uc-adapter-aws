@@ -1,10 +1,12 @@
-import grpc
-from concurrent import futures
-import boto3
 import os
+from concurrent import futures
+
+import boto3
+import grpc
 from dotenv import load_dotenv
 
-import adapter_interface_pb2_grpc, adapter_interface_pb2
+import adapter_interface_pb2
+import adapter_interface_pb2_grpc
 
 load_dotenv()
 session = boto3.Session(
