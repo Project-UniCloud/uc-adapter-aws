@@ -38,3 +38,8 @@ jobs:
 
       - name: Push Docker image
         run: docker push ${{ env.IMAGE_NAME }}
+
+      - name: Trigger restart webhook
+        run: |
+          curl -X GET "https://unicloud.projektstudencki.pl/restart-webhook/uc-adapter-aws" \
+            -H "Authorization: Bearer ${{ secrets.RESTART_SECRET }}"
