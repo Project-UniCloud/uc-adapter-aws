@@ -19,6 +19,16 @@ class GroupManager:
     def __init__(self):
         self.iam_client = boto3.client('iam')
 
+    def group_exists(self, group_name: str) -> bool:
+        group_name = _normalize_name(group_name)
+        try:
+            self.iam_client.get_group(GroupName=group_name)
+            return True
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "NoSuchEntity":
+                return False
+            raise
+
     def create_group_with_leaders(self, resource_type: str, leaders: list[str], group_name: str):
         group_name = _normalize_name(group_name)
 

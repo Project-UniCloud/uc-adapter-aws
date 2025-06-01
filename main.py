@@ -23,6 +23,20 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
         response.isHealthy = True
         return response
 
+    def GroupExists(self, request, context):
+        try:
+            group_exists = group_manager.group_exists(
+                group_name=request.groupName
+            )
+            response = pb2.GroupExistsResponse()
+            response.exists = group_exists
+            return response
+        except Exception as e:
+            print(f"❌ Błąd podczas tworzenia użytkowników: {e}")
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return pb2.GroupExistsResponse()
+
     def CreateUsersForGroup(self, request, context):
         try:
             result_msg = self.user_manager.create_users_for_group(
