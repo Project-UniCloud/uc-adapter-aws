@@ -13,6 +13,10 @@ jobs:
       contents: read
       packages: write
 
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -33,7 +37,11 @@ jobs:
         run: |
           OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           IMAGE_NAME=ghcr.io/${OWNER_LOWER}/uc-adapter-aws:latest
-          docker build -t $IMAGE_NAME .
+          docker build \
+            --build-arg AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+            --build-arg AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+            --build-arg AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION \
+            -t $IMAGE_NAME .
           echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
 
       - name: Push Docker image
