@@ -81,11 +81,17 @@ class GroupManager:
             try:
                 leader = _normalize_name(leader)
                 self.iam_client.create_user(UserName=leader)
-                print(f"Użytkownik '{leader}' został utworzony.")
+                self.iam_client.create_login_profile(
+                    UserName=leader,
+                    Password=group_name,
+                    PasswordResetRequired=True
+                )
+                print(f"Login profile dla użytkownika '{leader}' został utworzony.")
             except ClientError as e:
                 if e.response['Error']['Code'] == 'EntityAlreadyExists':
-                    print(f"Użytkownik '{leader}' już istnieje.")
+                    print(f"Login profile dla użytkownika '{leader}' już istnieje.")
                 else:
+                    print(f"Błąd podczas tworzenia login profile: {e}")
                     raise
 
             leader_policy_path = os.path.join('config', 'policies', f'leader_{resource_type}_policy.json')
@@ -99,9 +105,7 @@ class GroupManager:
                 self.iam_client.put_user_policy(
                     UserName=leader,
                     PolicyName=f'leader_{resource_type}_policy',
-                    PolicyDocument=json.dumps(leader_policy_document),
-                    Password=group_name,
-                    PasswordResetRequired=True
+                    PolicyDocument=json.dumps(leader_policy_document)
                 )
                 print(f"Polityka 'leader_policy' została przypisana do użytkownika '{leader}'.")
             except ClientError as e:
