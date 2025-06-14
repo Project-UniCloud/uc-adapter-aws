@@ -2,11 +2,12 @@ import boto3
 from datetime import datetime
 
 # Create a Cost Explorer client
-client = boto3.client('ce')  # Cost Explorer
+client = boto3.client('ce')
 
-def get_total_cost_for_group(group_tag_value: str, start_date: str):
-    # Get the current date in UTC as the end date
-    end = datetime.now(datetime.UTC).date()
+def get_total_cost_for_group(group_tag_value: str, start_date: str, end: str = None):
+    # If end_date is not provided, use the current date in UTC
+    if end is None:
+        end = datetime.now(datetime.UTC).strftime('%Y-%m-%d')
 
     # Query AWS Cost Explorer for costs grouped by the 'Group' tag
     response = client.get_cost_and_usage(
@@ -40,9 +41,10 @@ def get_total_cost_for_group(group_tag_value: str, start_date: str):
     return round(total, 2)
 
 
-def get_total_costs_for_all_groups(start_date: str) -> dict:
-    # Get the current date in UTC as the end date
-    end = datetime.now(datetime.UTC).date()
+def get_total_costs_for_all_groups(start_date: str, end: str = None) -> dict:
+    # If end_date is not provided, use the current date in UTC
+    if end is None:
+        end = datetime.now(datetime.UTC).strftime('%Y-%m-%d')
 
     # Query AWS Cost Explorer for costs grouped by the 'Group' tag
     response = client.get_cost_and_usage(
