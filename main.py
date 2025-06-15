@@ -104,7 +104,7 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_details(f"Nieoczekiwany błąd: {e}")
             return pb2.GroupCreatedResponse()
 
-    def GetTotalCostForGroup(self, request, context):  # ✅ poprawione wcięcie
+    def GetTotalCostForGroup(self, request, context):
         logging.info(f"💰 Pobieranie kosztów dla grupy: {request.groupName}, od: {request.startDate}")
         try:
             cost = limits_manager.get_total_cost_for_group(
@@ -140,7 +140,7 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_details(f"Błąd podczas pobierania kosztów grup: {e}")
             return pb2.AllGroupsCostResponse()
 
-    def GetTotalAwsCost(self, request, context):
+    def GetTotalCost(self, request, context):
         logging.info(f"🌐 Pobieranie całkowitych kosztów AWS od: {request.startDate}")
         try:
             cost = limits_manager.get_total_aws_cost(
