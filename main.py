@@ -9,6 +9,7 @@ import adapter_interface_pb2 as pb2
 
 from iam.group_manager import GroupManager
 from iam.user_manager import UserManager
+from cost_monitoring import limit_menager as limits_manager  # ✅ Poprawiony import
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,9 +32,7 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
     def GroupExists(self, request, context):
         logging.info(f"🔍 Sprawdzanie czy grupa istnieje: {request.groupName}")
         try:
-            group_exists = group_manager.group_exists(
-                group_name=request.groupName
-            )
+            group_exists = group_manager.group_exists(group_name=request.groupName)
             response = pb2.GroupExistsResponse()
             response.exists = group_exists
             return response
@@ -80,7 +79,7 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details(msg)
                 return pb2.GroupCreatedResponse()
-            print(request.resourceType)
+
             group_manager.create_group_with_leaders(
                 resource_type=request.resourceType,
                 leaders=list(request.leaders),
@@ -104,6 +103,58 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(f"Nieoczekiwany błąd: {e}")
             return pb2.GroupCreatedResponse()
+
+    def GetTotalCostForGroup(self, request, context):  # ✅ poprawione wcięcie
+        logging.info(f"💰 Pobieranie kosztów dla grupy: {request.groupName}, od: {request.startDate}")
+        try:
+            cost = limits_manager.get_total_cost_for_group(
+                group_tag_value=request.groupName,
+                start_date=request.startDate,
+                end=request.endDate or None
+            )
+            response = pb2.CostResponse()
+            response.amount = cost
+            return response
+        except Exception as e:
+            logging.error(f"❌ Błąd w GetTotalCostForGroup: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Błąd podczas pobierania kosztów grupy: {e}")
+            return pb2.CostResponse()
+
+    def GetTotalCostsForAllGroups(self, request, context):
+        logging.info(f"📊 Pobieranie kosztów dla wszystkich grup od: {request.startDate}")
+        try:
+            costs_dict = limits_manager.get_total_costs_for_all_groups(
+                start_date=request.startDate,
+                end=request.endDate or None
+            )
+            response = pb2.AllGroupsCostResponse()
+            for group, cost in costs_dict.items():
+                group_cost = response.groupCosts.add()
+                group_cost.groupName = group
+                group_cost.amount = cost
+            return response
+        except Exception as e:
+            logging.error(f"❌ Błąd w GetTotalCostsForAllGroups: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Błąd podczas pobierania kosztów grup: {e}")
+            return pb2.AllGroupsCostResponse()
+
+    def GetTotalAwsCost(self, request, context):
+        logging.info(f"🌐 Pobieranie całkowitych kosztów AWS od: {request.startDate}")
+        try:
+            cost = limits_manager.get_total_aws_cost(
+                start_date=request.startDate,
+                end_date=request.endDate or None
+            )
+            response = pb2.CostResponse()
+            response.amount = cost
+            return response
+        except Exception as e:
+            logging.error(f"❌ Błąd w GetTotalAwsCost: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Błąd podczas pobierania całkowitych kosztów AWS: {e}")
+            return pb2.CostResponse()
 
 
 def serve():
