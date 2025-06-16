@@ -9,7 +9,7 @@ import adapter_interface_pb2 as pb2
 
 from iam.group_manager import GroupManager
 from iam.user_manager import UserManager
-from cost_monitoring import limit_menager as limits_manager
+from cost_monitoring import limit_manager as limits_manager
 
 logging.basicConfig(
     level=logging.INFO,
