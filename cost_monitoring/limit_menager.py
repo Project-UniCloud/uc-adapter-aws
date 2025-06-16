@@ -137,3 +137,57 @@ def get_total_aws_cost(start_date: str, end_date: str = None) -> float:
     except ClientError as error:
         print(f"AWS error while fetching total AWS cost: {error}")
         return 0.0
+
+
+def get_total_cost_with_service_breakdown(start_date: str, end_date: str = None) -> dict:
+    if end_date is None:
+        end_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+
+    try:
+        # Create a paginator for the Cost Explorer API
+        paginator = client.get_paginator('get_cost_and_usage')
+        cost_by_service = {}
+        total_cost = 0.0
+
+        # Iterate through all pages of the paginated response
+        for page in paginator.paginate(
+                TimePeriod={'Start': start_date, 'End': end_date},
+                Granularity='MONTHLY',
+                Metrics=['UnblendedCost'],
+                GroupBy=[
+                    {'Type': 'DIMENSION', 'Key': 'SERVICE'}
+                ]
+        ):
+            # For each time period in the results
+            for result_by_time in page['ResultsByTime']:
+                # Add the total cost for this period to the accumulator
+                total_cost += float(result_by_time['Total']['UnblendedCost']['Amount'])
+
+                # Iterate through each service group in the result
+                for group in result_by_time['Groups']:
+                    service_name = group['Keys'][0]
+                    amount = float(group['Metrics']['UnblendedCost']['Amount'])
+
+                    # Skip services with zero or negative cost
+                    if amount <= 0:
+                        continue
+
+                    # Accumulate cost per service
+                    cost_by_service[service_name] = cost_by_service.get(service_name, 0.0) + amount
+
+        # Return the total cost and a breakdown by service, sorted by cost descending
+        return {
+            'total': round(total_cost, 2),
+            'by_service': {k: round(v, 2) for k, v in sorted(
+                cost_by_service.items(),
+                key=lambda item: item[1],
+                reverse=True
+            )}
+        }
+
+    except ClientError as error:
+        print(f"AWS error while fetching total AWS cost with service breakdown: {error}")
+        return {
+            'total': 0.0,
+            'by_service': {}
+        }

@@ -179,6 +179,26 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_details(f"Błąd podczas pobierania całkowitych kosztów AWS: {e}")
             return pb2.CostResponse()
 
+    def GetTotalCostWithServiceBreakdown(self, request, context):
+        logging.info(f"🧾 Pobieranie całkowitych kosztów AWS z podziałem na usługi od: {request.startDate}")
+        try:
+            result = limits_manager.get_total_cost_with_service_breakdown(
+                start_date=request.startDate,
+                end_date=request.endDate or None
+            )
+            response = pb2.GroupServiceBreakdownResponse()
+            response.total = result['total']
+            for service_name, amount in result['by_service'].items():
+                entry = response.breakdown.add()
+                entry.serviceName = service_name
+                entry.amount = amount
+            return response
+        except Exception as e:
+            logging.error(f"❌ Błąd w GetTotalCostWithServiceBreakdown: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Błąd podczas pobierania kosztów AWS: {e}")
+            return pb2.GroupServiceBreakdownResponse()
+
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
