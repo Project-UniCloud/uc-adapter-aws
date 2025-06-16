@@ -149,7 +149,7 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
         try:
             costs_dict = limits_manager.get_total_costs_for_all_groups(
                 start_date=request.startDate,
-                end=request.endDate or None
+                end_date=request.endDate or None
             )
             response = pb2.AllGroupsCostResponse()
             for group, cost in costs_dict.items():
