@@ -1,25 +1,104 @@
 {
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Action": "ec2:*",
-      "Effect": "Allow",
-      "Resource": "*"
-    },
-    {
-      "Action": "elasticloadbalancing:*",
-      "Effect": "Allow",
-      "Resource": "*"
-    },
-    {
-      "Action": "cloudwatch:*",
-      "Effect": "Allow",
-      "Resource": "*"
-    },
-    {
-      "Action": "autoscaling:*",
-      "Effect": "Allow",
-      "Resource": "*"
-    }
-  ]
+	"Version": "2012-10-17",
+	"Statement": [
+		{
+			"Sid": "AllowEC2Creation",
+			"Effect": "Allow",
+			"Action": "ec2:RunInstances",
+			"Resource": [
+				"arn:aws:ec2:*:*:instance/*",
+				"arn:aws:ec2:*:*:subnet/*",
+				"arn:aws:ec2:*:*:volume/*",
+				"arn:aws:ec2:*:*:network-interface/*",
+				"arn:aws:ec2:*:*:key-pair/*",
+				"arn:aws:ec2:*:*:security-group/*",
+				"arn:aws:ec2:*::image/*",
+				"arn:aws:ec2:*:*:vpc/*"
+			],
+			"Condition": {
+				"Null": {
+					"aws:RequestTag/CreatedBy": "true",
+					"aws:RequestTag/Group": "true"
+				}
+			}
+		},
+		{
+			"Sid": "AllowEC2Describe",
+			"Effect": "Allow",
+			"Action": [
+				"ec2:Describe*",
+				"ec2:Get*"
+			],
+			"Resource": "*"
+		},
+		{
+			"Sid": "AllowSecurityGroupManagement",
+			"Effect": "Allow",
+			"Action": [
+				"ec2:CreateSecurityGroup",
+				"ec2:AuthorizeSecurityGroupIngress",
+				"ec2:AuthorizeSecurityGroupEgress"
+			],
+			"Resource": [
+				"arn:aws:ec2:*:*:security-group/*",
+				"arn:aws:ec2:*:*:vpc/*"
+			]
+		},
+		{
+			"Sid": "AllowResourceAccess",
+			"Effect": "Allow",
+			"Action": [
+				"ec2:CreateTags",
+				"ec2:AttachVolume",
+				"ec2:DetachVolume"
+			],
+			"Resource": "*"
+		},
+		{
+			"Sid": "RestrictInstanceActions",
+			"Effect": "Allow",
+			"Action": [
+				"ec2:StartInstances",
+				"ec2:StopInstances",
+				"ec2:RebootInstances",
+				"ec2:TerminateInstances",
+				"ec2:HibernateInstances",
+				"ec2:ConnectSSM"
+			],
+			"Resource": "arn:aws:ec2:*:*:instance/*",
+			"Condition": {
+				"StringEquals": {
+					"aws:ResourceTag/CreatedBy": "${aws:username}"
+				}
+			}
+		},
+		{
+			"Sid": "AllowSSMAccess",
+			"Effect": "Allow",
+			"Action": [
+				"ssm:StartSession",
+				"ssm:SendCommand"
+			],
+			"Resource": [
+				"arn:aws:ec2:*:*:instance/*",
+				"arn:aws:ssm:*:*:document/AWS-StartSSHSession"
+			],
+			"Condition": {
+				"StringEquals": {
+					"aws:ResourceTag/CreatedBy": "${aws:username}"
+				}
+			}
+		},
+		{
+			"Sid": "AllowIAMPassRole",
+			"Effect": "Allow",
+			"Action": "iam:PassRole",
+			"Resource": "arn:aws:iam::*:role/EC2InstanceRole",
+			"Condition": {
+				"StringEquals": {
+					"iam:PassedToService": "ec2.amazonaws.com"
+				}
+			}
+		}
+	]
 }

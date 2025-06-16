@@ -21,7 +21,10 @@ def get_creator_name(user_identity):
         # Wyodrębnij nazwę roli z ARN
         arn = user_identity.get('arn', '')
         if '/assumed-role/' in arn:
-            return arn.split('/')[-2]
+            parts = arn.split('/')
+            if len(parts) >= 2:
+                return parts[-2]  # Nazwa roli
+            return parts[-1]
         elif ':role/' in arn:
             return arn.split('/')[-1]
         return 'assumed-role'
@@ -43,18 +46,29 @@ def get_creator_group_tag(iam, user_identity):
         identity_name = get_creator_name(user_identity)
         identity_type = user_identity.get('type', '')
 
+        logger.info(f"Getting group tag for {identity_name} ({identity_type})")
+
         if identity_type == 'IAMUser':
+            logger.info(f"Listing tags for IAM user: {identity_name}")
             response = iam.list_user_tags(UserName=identity_name)
             tags = response.get('Tags', [])
 
         elif identity_type == 'AssumedRole':
-            # Dla ról, używamy nazwy roli bez ścieżki
+            # Usuń ścieżkę z nazwy roli
             role_name = identity_name.split('/')[-1]
+            logger.info(f"Listing tags for IAM role: {role_name}")
             response = iam.list_role_tags(RoleName=role_name)
             tags = response.get('Tags', [])
 
+        elif identity_type == 'Root':
+            # Dla roota nie ma tagów, zwracamy None
+            logger.info("Root identity, no tags available")
+            return 'None'
         else:
+            logger.warning(f"Unhandled identity type: {identity_type}")
             tags = []
+
+        logger.info(f"Found tags: {tags}")
 
         # Znajdź tag Group
         for tag in tags:
@@ -98,9 +112,11 @@ def lambda_handler(event, context):
 
         # Uzyskaj nazwę twórcy
         creator_name = get_creator_name(user_identity)
+        logger.info(f"Creator name: {creator_name}")
 
         # Uzyskaj wartość tagu Group
         group_value = get_creator_group_tag(iam, user_identity)
+        logger.info(f"Group value: {group_value}")
 
         # Utwórz tagi
         tags = [

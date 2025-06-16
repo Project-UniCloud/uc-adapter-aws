@@ -148,6 +148,10 @@ class AutoTaggingDeployer:
                     "Effect": "Allow",
                     "Action": [
                         "ec2:CreateTags",
+                        "iam:ListUserTags",
+                        "iam:ListRoleTags",
+                        "iam:GetUser",
+                        "iam:GetRole",
                         "logs:CreateLogGroup",
                         "logs:CreateLogStream",
                         "logs:PutLogEvents",

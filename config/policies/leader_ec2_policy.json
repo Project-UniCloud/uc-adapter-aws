@@ -1,25 +1,51 @@
 {
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Action": "ec2:*",
-      "Effect": "Allow",
-      "Resource": "*"
-    },
-    {
-      "Action": "elasticloadbalancing:*",
-      "Effect": "Allow",
-      "Resource": "*"
-    },
-    {
-      "Action": "cloudwatch:*",
-      "Effect": "Allow",
-      "Resource": "*"
-    },
-    {
-      "Action": "autoscaling:*",
-      "Effect": "Allow",
-      "Resource": "*"
-    }
-  ]
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "AllowGroupInstanceActions",
+            "Effect": "Allow",
+            "Action": [
+                "ec2:StartInstances",
+                "ec2:StopInstances",
+                "ec2:RebootInstances",
+                "ec2:TerminateInstances",
+                "ec2:HibernateInstances",
+                "ec2:ConnectSSM"
+            ],
+            "Resource": "arn:aws:ec2:*:*:instance/*",
+            "Condition": {
+                "StringEquals": {
+                    "aws:ResourceTag/Group": "${aws:PrincipalTag/Group}"
+                }
+            }
+        },
+        {
+            "Sid": "AllowGroupSSMAccess",
+            "Effect": "Allow",
+            "Action": [
+                "ssm:StartSession",
+                "ssm:SendCommand"
+            ],
+            "Resource": [
+                "arn:aws:ec2:*:*:instance/*",
+                "arn:aws:ssm:*:*:document/AWS-StartSSHSession"
+            ],
+            "Condition": {
+                "StringEquals": {
+                    "aws:ResourceTag/Group": "${aws:PrincipalTag/Group}"
+                }
+            }
+        },
+        {
+            "Sid": "ViewGroupInstances",
+            "Effect": "Allow",
+            "Action": "ec2:DescribeInstances",
+            "Resource": "*",
+            "Condition": {
+                "StringEquals": {
+                    "aws:ResourceTag/Group": "${aws:PrincipalTag/Group}"
+                }
+            }
+        }
+    ]
 }
