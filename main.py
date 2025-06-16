@@ -9,7 +9,7 @@ import adapter_interface_pb2 as pb2
 
 from iam.group_manager import GroupManager
 from iam.user_manager import UserManager
-from cost_monitoring import limit_menager as limits_manager  # ✅ Poprawiony import
+from cost_monitoring import limit_menager as limits_manager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -120,6 +120,29 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(f"Błąd podczas pobierania kosztów grupy: {e}")
             return pb2.CostResponse()
+
+    def GetGroupCostWithServiceBreakdown(self, request, context):
+        logging.info(f"🔍 Pobieranie szczegółowych kosztów dla grupy: {request.groupName}, od: {request.startDate}")
+        try:
+            breakdown = limits_manager.get_group_cost_with_service_breakdown(
+                group_tag_value=request.groupName,
+                start_date=request.startDate,
+                end_date=request.endDate or None
+            )
+
+            response = pb2.GroupServiceBreakdownResponse()
+            response.total = breakdown['total']
+            for service_name, amount in breakdown['by_service'].items():
+                service_cost = response.breakdown.add()
+                service_cost.serviceName = service_name
+                service_cost.amount = amount
+
+            return response
+        except Exception as e:
+            logging.error(f"❌ Błąd w GetGroupCostWithServiceBreakdown: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Błąd podczas pobierania kosztów usług grupy: {e}")
+            return pb2.GroupServiceBreakdownResponse()
 
     def GetTotalCostsForAllGroups(self, request, context):
         logging.info(f"📊 Pobieranie kosztów dla wszystkich grup od: {request.startDate}")
