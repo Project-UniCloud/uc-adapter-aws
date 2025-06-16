@@ -110,7 +110,7 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             cost = limits_manager.get_total_cost_for_group(
                 group_tag_value=request.groupName,
                 start_date=request.startDate,
-                end=request.endDate or None
+                end_date=request.endDate or None
             )
             response = pb2.CostResponse()
             response.amount = cost
