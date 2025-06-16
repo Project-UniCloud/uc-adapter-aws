@@ -1,85 +1,94 @@
 import boto3
+from datetime import datetime, timezone
+from botocore.exceptions import ClientError
 
-# Create a Cost Explorer client
+# Klient do AWS Cost Explorer
 client = boto3.client('ce')
 
 
-from datetime import datetime, timezone
+def get_total_cost_for_group(group_tag_value: str, start_date: str, end_date: str = None) -> float:
+    if end_date is None:
+        end_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
-def get_total_cost_for_group(group_tag_value: str, start_date: str, end_date: str = None):
-    print('Fetching costs for group:', group_tag_value, 'from:', start_date, 'to:', end_date)
+    try:
+        # Pobieranie danych z filtrowaniem po tagu
+        response = client.get_cost_and_usage(
+            TimePeriod={'Start': start_date, 'End': end_date},
+            Granularity='MONTHLY',
+            Metrics=['UnblendedCost'],
+            Filter={
+                'Tags': {
+                    'Key': 'Group',
+                    'Values': [group_tag_value]
+                }
+            }
+        )
 
-    response = client.get_cost_and_usage(
-        TimePeriod={
-            'Start': "2025-05-01",
-            'End': "2025-06-01"
-        },
-        Granularity='MONTHLY',
-        Metrics=['UnblendedCost'],
-        GroupBy=[{
-            'Type': 'TAG',
-            'Key': 'Group'
-        }]
-    )
+        # Sumowanie kosztów ze wszystkich okresów
+        total = sum(
+            float(result['Total']['UnblendedCost']['Amount'])
+            for result in response['ResultsByTime']
+        )
+        return round(total, 2)
 
-    total = 0.0
-    for result_by_time in response['ResultsByTime']:
-        for group in result_by_time['Groups']:
-            tag_key = group['Keys'][0]
-            amount = float(group['Metrics']['UnblendedCost']['Amount'])
-
-            if f"Group${group_tag_value}" == tag_key:
-                total += amount
-
-    return round(total, 2)
+    except ClientError as error:
+        print(f"Błąd AWS przy pobieraniu kosztów dla grupy {group_tag_value}: {error}")
+        return 0.0
 
 
 def get_total_costs_for_all_groups(start_date: str, end_date: str = None) -> dict:
+    if end_date is None:
+        end_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
-    response = client.get_cost_and_usage(
-        TimePeriod={
-            'Start': start_date,
-            'End': end_date,
-        },
-        Granularity='MONTHLY',
-        Metrics=['UnblendedCost'],
-        GroupBy=[
-            {
-                'Type': 'TAG',
-                'Key': 'Group'
-            }
-        ]
-    )
+    koszty_grup = {}
 
-    group_costs = {}
+    try:
+        # Paginacja dla dużych zestawów danych
+        paginator = client.get_paginator('get_cost_and_usage')
+        for page in paginator.paginate(
+                TimePeriod={'Start': start_date, 'End': end_date},
+                Granularity='MONTHLY',
+                Metrics=['UnblendedCost'],
+                GroupBy=[{'Type': 'TAG', 'Key': 'Group'}]
+        ):
+            # Przetwarzanie każdego wyniku
+            for result in page['ResultsByTime']:
+                for group in result['Groups']:
+                    klucz_tagu = group['Keys'][0]
 
-    for result_by_time in response['ResultsByTime']:
-        for group in result_by_time['Groups']:
-            tag_key = group['Keys'][0]
-            amount = float(group['Metrics']['UnblendedCost']['Amount'])
+                    # Ekstrakcja nazwy grupy z formatu "Group$nazwa_grupy"
+                    if '$' in klucz_tagu:
+                        nazwa_grupy = klucz_tagu.split('$', 1)[1]
+                    else:
+                        nazwa_grupy = klucz_tagu
 
-            group_name = tag_key.split('$')[1] if '$' in tag_key else tag_key
-            group_costs[group_name] = group_costs.get(group_name, 0.0) + amount
+                    koszt = float(group['Metrics']['UnblendedCost']['Amount'])
+                    koszty_grup[nazwa_grupy] = koszty_grup.get(nazwa_grupy, 0.0) + koszt
 
-    return {group: round(cost, 2) for group, cost in group_costs.items()}
+        return {grupa: round(koszt, 2) for grupa, koszt in koszty_grup.items()}
+
+    except ClientError as error:
+        print(f"Błąd AWS przy pobieraniu kosztów grup: {error}")
+        return {}
 
 
 def get_total_aws_cost(start_date: str, end_date: str = None) -> float:
+    if end_date is None:
+        end_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
-    response = client.get_cost_and_usage(
-        TimePeriod={
-            'Start': start_date,
-            'End': end_date,
-        },
-        Granularity='MONTHLY',
-        Metrics=['UnblendedCost']
-    )
+    try:
+        response = client.get_cost_and_usage(
+            TimePeriod={'Start': start_date, 'End': end_date},
+            Granularity='MONTHLY',
+            Metrics=['UnblendedCost']
+        )
 
-    total_cost = 0.0
+        total = sum(
+            float(result['Total']['UnblendedCost']['Amount'])
+            for result in response['ResultsByTime']
+        )
+        return round(total, 2)
 
-    for result_by_time in response['ResultsByTime']:
-        amount = float(result_by_time['Total']['UnblendedCost']['Amount'])
-        total_cost += amount
-
-    return round(total_cost, 2)
-
+    except ClientError as error:
+        print(f"Błąd AWS przy pobieraniu całkowitego kosztu: {error}")
+        return 0.0
