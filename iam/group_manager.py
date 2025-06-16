@@ -80,7 +80,9 @@ class GroupManager:
         for leader in leaders:
             try:
                 leader = _normalize_name(leader)
-                self.iam_client.create_user(UserName=leader)
+                self.iam_client.create_user(
+                    UserName=leader,
+                    Tags=[{'Key': 'Group', 'Value': group_name}])
                 self.iam_client.create_login_profile(
                     UserName=leader,
                     Password=group_name,
