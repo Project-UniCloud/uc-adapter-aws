@@ -79,7 +79,8 @@ class GroupManager:
 
         for leader in leaders:
             try:
-                leader = _normalize_name(leader)
+                raw_leader = f"{leader}-{group_name}"
+                leader = _normalize_name(raw_leader)
                 self.iam_client.create_user(
                     UserName=leader,
                     Tags=[{'Key': 'Group', 'Value': group_name}])
