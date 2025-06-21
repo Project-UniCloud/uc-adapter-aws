@@ -30,7 +30,7 @@ def get_total_cost_for_group(group_tag_value: str, start_date: str, end_date: st
         return round(total, 2)
 
     except ClientError as error:
-        print(f"AWS error while fetching costs for group {group_tag_value}: {error}")
+        logging.error(f"AWS error while fetching costs for group {group_tag_value}: {error}")
         return 0.0
 
 
