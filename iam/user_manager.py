@@ -21,6 +21,7 @@ class UserManager:
 
     def create_users_for_group(self, users: list[str], group_name: str) -> str:
         created_users = []
+        group_name = _normalize_username(group_name)
         for user in users:
             raw_username = f"{user}-{group_name}"
             username = _normalize_username(raw_username)
