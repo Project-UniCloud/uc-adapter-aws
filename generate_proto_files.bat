@@ -1,6 +1,6 @@
 @echo off
 
-set PROTO_DIR=uc-protos\proto
+set PROTO_DIR=protos\proto
 
 set PROTO_FILE=%PROTO_DIR%\adapter_interface.proto
 
