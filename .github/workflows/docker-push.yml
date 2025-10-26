@@ -54,5 +54,5 @@ jobs:
         env:
           RESTART_SECRET: ${{ secrets.RESTART_SECRET }}
         run: |
-          curl -X GET "http://localhost/restart-webhook/uc-backend" \
+          curl -X GET "http://unicloud.projektstudencki.pl/restart-webhook/uc-backend" \
             -H "Authorization: Bearer $RESTART_SECRET"
