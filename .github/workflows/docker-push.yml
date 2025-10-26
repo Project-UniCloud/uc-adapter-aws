@@ -44,8 +44,15 @@ jobs:
         if: github.event_name == 'push'
         run: docker push ${{ env.IMAGE_NAME }}
 
+  deploy:
+    name: Deploy (Restart Application)
+    runs-on: self-hosted
+    needs: build
+    if: github.event_name == 'push'
+    steps:
       - name: Trigger restart webhook
-        if: github.event_name == 'push'
+        env:
+          RESTART_SECRET: ${{ secrets.RESTART_SECRET }}
         run: |
-          curl -X GET "https://unicloud.projektstudencki.pl/restart-webhook/uc-adapter-aws" \
-            -H "Authorization: Bearer ${{ secrets.RESTART_SECRET }}"
+          curl -X GET "http://localhost/restart-webhook/uc-backend" \
+            -H "Authorization: Bearer $RESTART_SECRET"
