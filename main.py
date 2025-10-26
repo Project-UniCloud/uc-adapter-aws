@@ -10,6 +10,7 @@ import adapter_interface_pb2 as pb2
 from iam.group_manager import GroupManager
 from iam.user_manager import UserManager
 from cost_monitoring import limit_manager as limits_manager
+from clean_resources.cloud_adapter_server import find_resources_by_group, delete_resource
 
 logging.basicConfig(
     level=logging.INFO,
@@ -198,6 +199,33 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(f"Błąd podczas pobierania kosztów AWS: {e}")
             return pb2.GroupServiceBreakdownResponse()
+
+    def CleanupGroupResources(self, request, context):
+        logging.info(f"Starting cleanup for group: {request.groupName}")
+        group_name = request.groupName
+
+        # 1️⃣ znajdź zasoby
+        resources = find_resources_by_group("Group", group_name)
+
+        if not resources:
+            return pb2.CleanupGroupResponse(
+                success=True,
+                message=f"No resources found for group '{group_name}'"
+            )
+
+        # 2️⃣ usuń zasoby (jeśli deleteResources=True)
+        deleted = []
+        for r in resources:
+            msg = delete_resource(r)
+            deleted.append(msg)
+            logging.info(msg)
+
+        return pb2.CleanupGroupResponse(
+            success=True,
+            deletedResources=deleted,
+            message=f"Cleanup completed for group '{group_name}'"
+        )
+
 
 
 def serve():
