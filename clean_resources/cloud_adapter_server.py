@@ -23,7 +23,7 @@ def find_resources_by_group(tag_key: str, group_name: str):
     Wyszukuje zasoby AWS posiadające tag o kluczu=tag_key i wartości=group_name.
     Zwraca listę słowników z informacją o typie i identyfikatorze zasobu.
     """
-    client = boto3.client("resourcegroupstaggingapi", region_name="eu-central-1")
+    client = boto3.client("resourcegroupstaggingapi", region_name="us-east-1")
     paginator = client.get_paginator("get_resources")
 
     resources = []
@@ -48,7 +48,7 @@ def delete_resource(resource):
 
     try:
         if service == "ec2":
-            ec2 = boto3.resource("ec2", region_name="eu-central-1")
+            ec2 = boto3.resource("ec2", region_name="us-east-1")
             instance_id = arn.split("/")[-1]
             instance = ec2.Instance(instance_id)
             instance.terminate()
