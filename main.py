@@ -200,6 +200,22 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_details(f"Błąd podczas pobierania kosztów AWS: {e}")
             return pb2.GroupServiceBreakdownResponse()
 
+    def RemoveGroup(self, request, context):
+        logging.info(f"🗑️ Removing IAM group and its users: {request.groupName}")
+        try:
+            removed_users, message = group_manager.delete_group_and_users(request.groupName)
+            return pb2.RemoveGroupResponse(success=True, removedUsers=removed_users, message=message)
+        except ClientError as e:
+            logging.error(f"❌ AWS error in RemoveGroup: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"AWS error: {e}")
+            return pb2.RemoveGroupResponse(success=False, message=str(e))
+        except Exception as e:
+            logging.error(f"❌ Unexpected error in RemoveGroup: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Unexpected error: {e}")
+            return pb2.RemoveGroupResponse(success=False, message=str(e))
+
     def CleanupGroupResources(self, request, context):
         logging.info(f"Starting cleanup for group: {request.groupName}")
         group_name = request.groupName
