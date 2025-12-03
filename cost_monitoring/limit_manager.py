@@ -183,6 +183,60 @@ def get_group_cost_last_6_months_by_service(group_tag_value: str) -> dict:
         logging.error(f"AWS error while fetching last 6 months costs for group {group_tag_value}: {error}")
         return {}
 
+
+def get_group_monthly_costs_last_6_months(group_tag_value: str) -> dict[str, float]:
+    """
+    Zwraca słownik z 6 wpisami "dd-MM-yyyy" -> koszt całkowity dla danej grupy,
+    za ostatnie 6 miesięcy łącznie z bieżącym miesiącem (UTC). Zawsze pierwszy dzień miesiąca
+    (np. 01-07-2025). Kwoty są zaokrąglone do 2 miejsc.
+
+    Filtrowanie odbywa się po tagu Group=<group_tag_value>.
+    """
+    now = datetime.now(timezone.utc)
+    month_start = _first_day_of_month(now)
+    start_dt = _first_day_of_month(_shift_months(month_start, -5))
+    end_dt = _first_day_of_month(_shift_months(month_start, 1))  # CE End ekskluzywny
+
+    start_date = start_dt.strftime('%Y-%m-%d')
+    end_date = end_dt.strftime('%Y-%m-%d')
+
+    # Przygotuj z góry słownik z 6 miesiącami (pierwszy dzień miesiąca) o wartości 0.0
+    months_keys = []
+    for i in range(0, 6):
+        m_dt = _shift_months(_first_day_of_month(start_dt), i)
+        months_keys.append(m_dt.strftime('%d-%m-%Y'))
+    month_costs: dict[str, float] = {k: 0.0 for k in months_keys}
+
+    try:
+        response = client.get_cost_and_usage(
+            TimePeriod={'Start': start_date, 'End': end_date},
+            Granularity='MONTHLY',
+            Metrics=['UnblendedCost'],
+            Filter={
+                'Tags': {
+                    'Key': 'Group',
+                    'Values': [group_tag_value]
+                }
+            }
+        )
+
+        for by_time in response.get('ResultsByTime', []):
+            period_start = by_time.get('TimePeriod', {}).get('Start')  # 'YYYY-MM-DD'
+            try:
+                # CE zwraca pierwszy dzień miesiąca w formacie YYYY-MM-DD; mapujemy do dd-MM-yyyy
+                key = datetime.strptime(period_start, '%Y-%m-%d').strftime('%d-%m-%Y')
+            except Exception:
+                # W razie nietypowego formatu pomiń wpis
+                continue
+            amount = float(by_time.get('Total', {}).get('UnblendedCost', {}).get('Amount', '0'))
+            month_costs[key] = round(amount, 2)
+
+        return month_costs
+
+    except ClientError as error:
+        logging.error(f"AWS error while fetching monthly last 6 months costs for group {group_tag_value}: {error}")
+        return month_costs
+
 def get_total_costs_for_all_groups(start_date: str, end_date: str = None) -> dict:
     if end_date is None:
         end_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')

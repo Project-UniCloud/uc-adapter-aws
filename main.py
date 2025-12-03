@@ -242,6 +242,26 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_details(f"Błąd podczas pobierania kosztów 6-miesięcznych: {e}")
             return pb2.GroupCostMapResponse()
 
+    def GetGroupMonthlyCostsLast6Months(self, request, context):
+        group_name = (request.groupName or '').strip()
+        logging.info(f"📅 Pobieranie miesięcznych kosztów (ostatnie 6 mies.) dla grupy: {group_name}")
+        if not group_name:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details("Pole groupName nie może być puste.")
+            return pb2.GroupMonthlyCostsResponse()
+
+        try:
+            costs = limits_manager.get_group_monthly_costs_last_6_months(group_tag_value=group_name)
+            resp = pb2.GroupMonthlyCostsResponse()
+            for month, amount in costs.items():
+                resp.monthCosts[month] = amount
+            return resp
+        except Exception as e:
+            logging.error(f"❌ Błąd w GetGroupMonthlyCostsLast6Months: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Błąd podczas pobierania miesięcznych kosztów: {e}")
+            return pb2.GroupMonthlyCostsResponse()
+
     def RemoveGroup(self, request, context):
         logging.info(f"🗑️ Removing IAM group and its users: {request.groupName}")
         try:
