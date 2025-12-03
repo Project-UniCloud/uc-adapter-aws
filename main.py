@@ -105,6 +105,28 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_details(f"Nieoczekiwany błąd: {e}")
             return pb2.GroupCreatedResponse()
 
+    def GetResourceCount(self, request, context):
+        """
+        Zwraca liczbę zasobów posiadających tag Group=<groupName> dla wskazanego typu zasobu (service), np. "ec2", "s3".
+        """
+        group_name = request.groupName
+        resource_type = (request.resourceType or "").strip().lower()
+        logging.info(f"📦 Zliczanie zasobów dla grupy='{group_name}', typ='{resource_type}'")
+        if not resource_type:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details("Pole resourceType nie może być puste (np. 'ec2', 's3').")
+            return pb2.ResourceCountResponse()
+
+        try:
+            resources = find_resources_by_group("Group", group_name)
+            count = sum(1 for r in resources if (r.get("service") or "").lower() == resource_type)
+            return pb2.ResourceCountResponse(count=count)
+        except Exception as e:
+            logging.error(f"❌ Błąd w GetResourceCount: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Błąd podczas zliczania zasobów: {e}")
+            return pb2.ResourceCountResponse()
+
     def GetTotalCostForGroup(self, request, context):
         logging.info(f"💰 Pobieranie kosztów dla grupy: {request.groupName}, od: {request.startDate}")
         try:
@@ -199,6 +221,26 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(f"Błąd podczas pobierania kosztów AWS: {e}")
             return pb2.GroupServiceBreakdownResponse()
+
+    def GetGroupCostsLast6MonthsByService(self, request, context):
+        group_name = (request.groupName or '').strip()
+        logging.info(f"🗓️ Pobieranie kosztów (ostatnie 6 mies.) dla grupy: {group_name}")
+        if not group_name:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details("Pole groupName nie może być puste.")
+            return pb2.GroupCostMapResponse()
+
+        try:
+            costs = limits_manager.get_group_cost_last_6_months_by_service(group_tag_value=group_name)
+            resp = pb2.GroupCostMapResponse()
+            for k, v in costs.items():
+                resp.costs[k] = v
+            return resp
+        except Exception as e:
+            logging.error(f"❌ Błąd w GetGroupCostsLast6MonthsByService: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Błąd podczas pobierania kosztów 6-miesięcznych: {e}")
+            return pb2.GroupCostMapResponse()
 
     def RemoveGroup(self, request, context):
         logging.info(f"🗑️ Removing IAM group and its users: {request.groupName}")
