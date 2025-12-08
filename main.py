@@ -20,6 +20,10 @@ logging.basicConfig(
 load_dotenv()
 group_manager = GroupManager()
 
+SUPPORTED_RESOURCE_TYPES = [
+    "ec2"
+]
+
 class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
     def __init__(self):
         self.user_manager = UserManager()
@@ -303,6 +307,18 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             deletedResources=deleted,
             message=f"Cleanup completed for group '{group_name}'"
         )
+
+    def GetSupportedResourceTypes(self, request, context):
+        """
+        Zwraca listę obsługiwanych typów zasobów, np. ["ec2", "s3"].
+        """
+        try:
+            return pb2.SupportedResourceTypesResponse(resourceTypes=SUPPORTED_RESOURCE_TYPES)
+        except Exception as e:
+            logging.error(f"❌ Błąd w GetSupportedResourceTypes: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Błąd podczas pobierania typów zasobów: {e}")
+            return pb2.SupportedResourceTypesResponse()
 
 
 
