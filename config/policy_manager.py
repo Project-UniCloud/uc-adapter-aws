@@ -13,7 +13,7 @@ class PolicyManager:
     def get_available_services(self) -> List[str]:
         """
         Zwraca listę usług, które posiadają parę plików polityk:
-        leader_{usluga}_policy.json ORAZ student_{usluga}_policy.json
+        leader_{usluga}_policy.json AND student_{usluga}_policy.json
         """
         if not self.policies_path.exists():
             logging.warning(f"⚠️ Katalog polityk nie istnieje: {self.policies_path}")
