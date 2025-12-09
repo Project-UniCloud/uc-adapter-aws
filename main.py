@@ -90,7 +90,9 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             return pb2.CreateUsersForGroupResponse()
 
     def CreateGroupWithLeaders(self, request, context):
-        logging.info(f"🏗️ Tworzenie grupy '{request.groupName}' z liderami: {request.leaders}")
+        logging.info(
+            f"🏗️ Tworzenie grupy '{request.groupName}' dla zasobów: {request.resourceTypes} z liderami: {request.leaders}")
+
         try:
             if not request.leaders:
                 msg = "Lista liderów jest pusta"
@@ -99,14 +101,24 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
                 context.set_details(msg)
                 return pb2.GroupCreatedResponse()
 
+            if not request.resourceTypes:
+                msg = "Lista typów zasobów (resourceTypes) jest pusta"
+                logging.warning(f"⚠️ {msg}")
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details(msg)
+                return pb2.GroupCreatedResponse()
+
             group_manager.create_group_with_leaders(
-                resource_type=request.resourceType,
+                resource_types=list(request.resourceTypes),
+                # ZMIANA: resourceTypes (liczba mnoga) i rzutowanie na listę
                 leaders=list(request.leaders),
                 group_name=request.groupName
             )
+
             response = pb2.GroupCreatedResponse()
             response.groupName = request.groupName
             return response
+
         except FileNotFoundError as e:
             logging.error(f"❌ Plik nie znaleziony: {e}", exc_info=True)
             context.set_code(grpc.StatusCode.NOT_FOUND)

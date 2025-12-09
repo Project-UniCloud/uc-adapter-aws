@@ -29,7 +29,7 @@ class GroupManager:
                 return False
             raise
 
-    def create_group_with_leaders(self, resource_type: str, leaders: list[str], group_name: str):
+    def create_group_with_leaders(self, resource_types: list[str], leaders: list[str], group_name: str):
         group_name = _normalize_name(group_name)
 
         try:
@@ -40,23 +40,30 @@ class GroupManager:
                 print(f"Grupa '{group_name}' już istnieje.")
             else:
                 raise
-        policy_path = os.path.join('config', 'policies', f"student_{resource_type}_policy.json")
-        if not os.path.isfile(policy_path):
-            raise FileNotFoundError(f"Plik polityki '{policy_path}' nie istnieje.")
 
-        with open(policy_path, 'r') as policy_file:
-            policy_document = json.load(policy_file)
+        for resource in resource_types:
+            policy_filename = f"student_{resource}_policy.json"
+            policy_path = os.path.join('config', 'policies', policy_filename)
 
-        try:
-            self.iam_client.put_group_policy(
-                GroupName=group_name,
-                PolicyName=f"student_{resource_type}_policy",
-                PolicyDocument=json.dumps(policy_document)
-            )
-            print(f"Polityka 'student_{resource_type}_policy' została przypisana do grupy '{group_name}'.")
-        except ClientError as e:
-            print(f"Błąd podczas przypisywania polityki do grupy: {e}")
-            raise
+            if not os.path.isfile(policy_path):
+                raise FileNotFoundError(
+                    f"Plik polityki '{policy_path}' nie istnieje. Upewnij się, że plik json jest w katalogu config/policies.")
+
+            with open(policy_path, 'r') as policy_file:
+                policy_document = json.load(policy_file)
+
+            policy_name = f"student_{resource}_policy"
+
+            try:
+                self.iam_client.put_group_policy(
+                    GroupName=group_name,
+                    PolicyName=policy_name,
+                    PolicyDocument=json.dumps(policy_document)
+                )
+                print(f"Polityka '{policy_name}' została pomyślnie przypisana do grupy '{group_name}'.")
+            except ClientError as e:
+                print(f"Błąd podczas przypisywania polityki '{policy_name}' do grupy: {e}")
+                raise
 
         change_pw_policy_path = os.path.join('config', 'policies', 'change_password_policy.json')
         if not os.path.isfile(change_pw_policy_path):
@@ -77,12 +84,16 @@ class GroupManager:
             raise
 
         for leader in leaders:
+            raw_leader = f"{leader}-{group_name}"
+            leader = _normalize_name(raw_leader)
+
             try:
-                raw_leader = f"{leader}-{group_name}"
-                leader = _normalize_name(raw_leader)
                 self.iam_client.create_user(
                     UserName=leader,
-                    Tags=[{'Key': 'Group', 'Value': group_name}])
+                    Tags=[{'Key': 'Group', 'Value': group_name}]
+                )
+                print(f"Użytkownik '{leader}' został utworzony.")
+
                 self.iam_client.create_login_profile(
                     UserName=leader,
                     Password=group_name,
@@ -91,28 +102,33 @@ class GroupManager:
                 print(f"Login profile dla użytkownika '{leader}' został utworzony.")
             except ClientError as e:
                 if e.response['Error']['Code'] == 'EntityAlreadyExists':
-                    print(f"Login profile dla użytkownika '{leader}' już istnieje.")
+                    print(f"Użytkownik lub profil dla '{leader}' już istnieje.")
                 else:
-                    print(f"Błąd podczas tworzenia login profile: {e}")
+                    print(f"Błąd podczas tworzenia użytkownika/profilu: {e}")
                     raise
 
-            leader_policy_path = os.path.join('config', 'policies', f'leader_{resource_type}_policy.json')
-            if not os.path.isfile(leader_policy_path):
-                raise FileNotFoundError(f"Plik polityki '{leader_policy_path}' nie istnieje.")
+            for resource in resource_types:
+                policy_filename = f"leader_{resource}_policy.json"
+                leader_policy_path = os.path.join('config', 'policies', policy_filename)
 
-            with open(leader_policy_path, 'r') as leader_policy_file:
-                leader_policy_document = json.load(leader_policy_file)
+                if not os.path.isfile(leader_policy_path):
+                    raise FileNotFoundError(f"Plik polityki '{leader_policy_path}' nie istnieje.")
 
-            try:
-                self.iam_client.put_user_policy(
-                    UserName=leader,
-                    PolicyName=f'leader_{resource_type}_policy',
-                    PolicyDocument=json.dumps(leader_policy_document)
-                )
-                print(f"Polityka 'leader_policy' została przypisana do użytkownika '{leader}'.")
-            except ClientError as e:
-                print(f"Błąd podczas przypisywania polityki do użytkownika '{leader}': {e}")
-                raise
+                with open(leader_policy_path, 'r') as leader_policy_file:
+                    leader_policy_document = json.load(leader_policy_file)
+
+                policy_name = f"leader_{resource}_policy"
+
+                try:
+                    self.iam_client.put_user_policy(
+                        UserName=leader,
+                        PolicyName=policy_name,
+                        PolicyDocument=json.dumps(leader_policy_document)
+                    )
+                    print(f"Polityka '{policy_name}' została przypisana do użytkownika '{leader}'.")
+                except ClientError as e:
+                    print(f"Błąd podczas przypisywania polityki '{policy_name}' do użytkownika '{leader}': {e}")
+                    raise
 
             try:
                 self.iam_client.add_user_to_group(
@@ -121,8 +137,11 @@ class GroupManager:
                 )
                 print(f"Użytkownik '{leader}' został dodany do grupy '{group_name}'.")
             except ClientError as e:
-                print(f"Błąd podczas dodawania użytkownika '{leader}' do grupy: {e}")
-                raise
+                if e.response['Error']['Code'] == 'EntityAlreadyExists':
+                    print(f"Użytkownik '{leader}' już znajduje się w grupie '{group_name}'.")
+                else:
+                    print(f"Błąd podczas dodawania użytkownika '{leader}' do grupy: {e}")
+                    raise
 
     def delete_group_and_users(self, group_name: str) -> tuple[list[str], str]:
         """
