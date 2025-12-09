@@ -11,6 +11,7 @@ from iam.group_manager import GroupManager
 from iam.user_manager import UserManager
 from cost_monitoring import limit_manager as limits_manager
 from clean_resources.cloud_adapter_server import find_resources_by_group, delete_resource
+from config.policy_manager import PolicyManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,6 +24,23 @@ group_manager = GroupManager()
 class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
     def __init__(self):
         self.user_manager = UserManager()
+        self.policy_manager = PolicyManager()
+
+    def GetAvailableServices(self, request, context):
+        logging.info("🔍 Pobieranie listy dostępnych usług na podstawie polityk")
+        try:
+            services_list = self.policy_manager.get_available_services()
+
+            response = pb2.GetAvailableServicesResponse()
+            # Dodajemy elementy listy do pola repeated w protobuf
+            response.services.extend(services_list)
+
+            return response
+        except Exception as e:
+            logging.error(f"❌ Błąd w GetAvailableServices: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Błąd podczas pobierania usług: {e}")
+            return pb2.GetAvailableServicesResponse()
 
     def GetStatus(self, request, context):
         logging.info("🔍 Sprawdzanie statusu serwera")
