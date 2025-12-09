@@ -26,7 +26,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry (GHCR)
-        if: github.event_name == 'push' # login tylko przy pushu
+        if: github.event_name == 'push'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -44,8 +44,15 @@ jobs:
         if: github.event_name == 'push'
         run: docker push ${{ env.IMAGE_NAME }}
 
+  deploy:
+    name: Deploy (Restart Application)
+    runs-on: self-hosted
+    needs: build
+    if: github.event_name == 'push'
+    steps:
       - name: Trigger restart webhook
-        if: github.event_name == 'push'
+        env:
+          RESTART_SECRET: ${{ secrets.RESTART_SECRET }}
         run: |
           curl -X GET "https://unicloud.projektstudencki.pl/restart-webhook/uc-adapter-aws" \
-            -H "Authorization: Bearer ${{ secrets.RESTART_SECRET }}"
+            -H "Authorization: Bearer $RESTART_SECRET"

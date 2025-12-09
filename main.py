@@ -10,6 +10,7 @@ import adapter_interface_pb2 as pb2
 from iam.group_manager import GroupManager
 from iam.user_manager import UserManager
 from cost_monitoring import limit_manager as limits_manager
+from clean_resources.cloud_adapter_server import find_resources_by_group, delete_resource
 from config.policy_manager import PolicyManager
 
 logging.basicConfig(
@@ -122,6 +123,28 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_details(f"Nieoczekiwany błąd: {e}")
             return pb2.GroupCreatedResponse()
 
+    def GetResourceCount(self, request, context):
+        """
+        Zwraca liczbę zasobów posiadających tag Group=<groupName> dla wskazanego typu zasobu (service), np. "ec2", "s3".
+        """
+        group_name = request.groupName
+        resource_type = (request.resourceType or "").strip().lower()
+        logging.info(f"📦 Zliczanie zasobów dla grupy='{group_name}', typ='{resource_type}'")
+        if not resource_type:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details("Pole resourceType nie może być puste (np. 'ec2', 's3').")
+            return pb2.ResourceCountResponse()
+
+        try:
+            resources = find_resources_by_group("Group", group_name)
+            count = sum(1 for r in resources if (r.get("service") or "").lower() == resource_type)
+            return pb2.ResourceCountResponse(count=count)
+        except Exception as e:
+            logging.error(f"❌ Błąd w GetResourceCount: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Błąd podczas zliczania zasobów: {e}")
+            return pb2.ResourceCountResponse()
+
     def GetTotalCostForGroup(self, request, context):
         logging.info(f"💰 Pobieranie kosztów dla grupy: {request.groupName}, od: {request.startDate}")
         try:
@@ -216,6 +239,89 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(f"Błąd podczas pobierania kosztów AWS: {e}")
             return pb2.GroupServiceBreakdownResponse()
+
+    def GetGroupCostsLast6MonthsByService(self, request, context):
+        group_name = (request.groupName or '').strip()
+        logging.info(f"🗓️ Pobieranie kosztów (ostatnie 6 mies.) dla grupy: {group_name}")
+        if not group_name:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details("Pole groupName nie może być puste.")
+            return pb2.GroupCostMapResponse()
+
+        try:
+            costs = limits_manager.get_group_cost_last_6_months_by_service(group_tag_value=group_name)
+            resp = pb2.GroupCostMapResponse()
+            for k, v in costs.items():
+                resp.costs[k] = v
+            return resp
+        except Exception as e:
+            logging.error(f"❌ Błąd w GetGroupCostsLast6MonthsByService: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Błąd podczas pobierania kosztów 6-miesięcznych: {e}")
+            return pb2.GroupCostMapResponse()
+
+    def GetGroupMonthlyCostsLast6Months(self, request, context):
+        group_name = (request.groupName or '').strip()
+        logging.info(f"📅 Pobieranie miesięcznych kosztów (ostatnie 6 mies.) dla grupy: {group_name}")
+        if not group_name:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details("Pole groupName nie może być puste.")
+            return pb2.GroupMonthlyCostsResponse()
+
+        try:
+            costs = limits_manager.get_group_monthly_costs_last_6_months(group_tag_value=group_name)
+            resp = pb2.GroupMonthlyCostsResponse()
+            for month, amount in costs.items():
+                resp.monthCosts[month] = amount
+            return resp
+        except Exception as e:
+            logging.error(f"❌ Błąd w GetGroupMonthlyCostsLast6Months: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Błąd podczas pobierania miesięcznych kosztów: {e}")
+            return pb2.GroupMonthlyCostsResponse()
+
+    def RemoveGroup(self, request, context):
+        logging.info(f"🗑️ Removing IAM group and its users: {request.groupName}")
+        try:
+            removed_users, message = group_manager.delete_group_and_users(request.groupName)
+            return pb2.RemoveGroupResponse(success=True, removedUsers=removed_users, message=message)
+        except ClientError as e:
+            logging.error(f"❌ AWS error in RemoveGroup: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"AWS error: {e}")
+            return pb2.RemoveGroupResponse(success=False, message=str(e))
+        except Exception as e:
+            logging.error(f"❌ Unexpected error in RemoveGroup: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Unexpected error: {e}")
+            return pb2.RemoveGroupResponse(success=False, message=str(e))
+
+    def CleanupGroupResources(self, request, context):
+        logging.info(f"Starting cleanup for group: {request.groupName}")
+        group_name = request.groupName
+
+        # 1️⃣ znajdź zasoby
+        resources = find_resources_by_group("Group", group_name)
+
+        if not resources:
+            return pb2.CleanupGroupResponse(
+                success=True,
+                message=f"No resources found for group '{group_name}'"
+            )
+
+        # 2️⃣ usuń zasoby (jeśli deleteResources=True)
+        deleted = []
+        for r in resources:
+            msg = delete_resource(r)
+            deleted.append(msg)
+            logging.info(msg)
+
+        return pb2.CleanupGroupResponse(
+            success=True,
+            deletedResources=deleted,
+            message=f"Cleanup completed for group '{group_name}'"
+        )
+
 
 
 def serve():

@@ -7,7 +7,7 @@ from botocore.exceptions import ClientError
 
 
 class AutoTaggingDeployer:
-    def __init__(self, region='eu-central-1'):
+    def __init__(self, region='us-east-1'):
         self.session = boto3.Session(region_name=region)
         self.iam = self.session.client('iam')
         self.lambda_client = self.session.client('lambda')
@@ -272,5 +272,5 @@ class AutoTaggingDeployer:
 
 
 if __name__ == '__main__':
-    deployer = AutoTaggingDeployer(region='eu-central-1')
+    deployer = AutoTaggingDeployer(region='us-east-1')
     deployer.deploy()
