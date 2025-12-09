@@ -1,0 +1,40 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "WidocznoscListyTabelBezBledow",
+            "Effect": "Allow",
+            "Action": [
+                "dynamodb:ListTables"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "PozwolStworzycPustaTabele",
+            "Effect": "Allow",
+            "Action": "dynamodb:CreateTable",
+            "Resource": "arn:aws:dynamodb:*:*:table/*"
+        },
+        {
+            "Sid": "PelnyDostepJesliZgadzaSieGrupa",
+            "Effect": "Allow",
+            "Action": [
+                "dynamodb:DescribeTable",
+                "dynamodb:DeleteTable",
+                "dynamodb:PutItem",
+                "dynamodb:GetItem",
+                "dynamodb:UpdateItem",
+                "dynamodb:DeleteItem",
+                "dynamodb:Query",
+                "dynamodb:Scan",
+                "dynamodb:ListTagsOfResource"
+            ],
+            "Resource": "arn:aws:dynamodb:*:*:table/*",
+            "Condition": {
+                "StringEquals": {
+                    "aws:ResourceTag/Group": "${aws:PrincipalTag/Group}"
+                }
+            }
+        }
+    ]
+}

@@ -1,0 +1,41 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "WidocznoscWKonsoliBezBledow",
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListAllMyBuckets",
+                "s3:GetBucketLocation"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "PozwolStworzycPustyBucket",
+            "Effect": "Allow",
+            "Action": "s3:CreateBucket",
+            "Resource": "arn:aws:s3:::*"
+        },
+        {
+            "Sid": "PelnyDostepJesliZgadzaSieGrupa",
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket",
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:DeleteBucket",
+                "s3:GetBucketTagging"
+            ],
+            "Resource": [
+                "arn:aws:s3:::*",
+                "arn:aws:s3:::*/*"
+            ],
+            "Condition": {
+                "StringEquals": {
+                    "aws:ResourceTag/Group": "${aws:PrincipalTag/Group}"
+                }
+            }
+        }
+    ]
+}
