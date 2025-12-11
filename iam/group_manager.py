@@ -32,6 +32,7 @@ class GroupManager:
     def create_group_with_leaders(self, resource_types: list[str], leaders: list[str], group_name: str):
         group_name = _normalize_name(group_name)
 
+        # 1. Tworzenie grupy
         try:
             self.iam_client.create_group(GroupName=group_name)
             print(f"Grupa '{group_name}' została utworzona.")
@@ -41,6 +42,7 @@ class GroupManager:
             else:
                 raise
 
+        # 2. Przypisywanie polityk zasobów (Student Policies)
         for resource in resource_types:
             policy_filename = f"student_{resource}_policy.json"
             policy_path = os.path.join('config', 'policies', policy_filename)
@@ -65,6 +67,7 @@ class GroupManager:
                 print(f"Błąd podczas przypisywania polityki '{policy_name}' do grupy: {e}")
                 raise
 
+        # 3. Przypisywanie polityki zmiany hasła
         change_pw_policy_path = os.path.join('config', 'policies', 'change_password_policy.json')
         if not os.path.isfile(change_pw_policy_path):
             raise FileNotFoundError(f"Plik polityki '{change_pw_policy_path}' nie istnieje.")
@@ -83,6 +86,26 @@ class GroupManager:
             print(f"Błąd podczas przypisywania polityki zmiany hasła do grupy: {e}")
             raise
 
+        region_policy_path = os.path.join('config', 'policies', 'regional_restriction_policy.json')
+
+        if os.path.isfile(region_policy_path):
+            with open(region_policy_path, 'r') as policy_file:
+                region_policy_document = json.load(policy_file)
+
+            try:
+                self.iam_client.put_group_policy(
+                    GroupName=group_name,
+                    PolicyName='regional_restriction_policy',
+                    PolicyDocument=json.dumps(region_policy_document)
+                )
+                print(f"Polityka 'regional_restriction_policy' została przypisana do grupy '{group_name}'.")
+            except ClientError as e:
+                print(f"Błąd podczas przypisywania polityki regionu do grupy: {e}")
+                raise
+        else:
+            print(f"⚠️ Ostrzeżenie: Plik '{region_policy_path}' nie istnieje. Pomijam blokadę regionu.")
+
+        # 4. Tworzenie Liderów
         for leader in leaders:
             raw_leader = f"{leader}-{group_name}"
             leader = _normalize_name(raw_leader)
@@ -107,6 +130,7 @@ class GroupManager:
                     print(f"Błąd podczas tworzenia użytkownika/profilu: {e}")
                     raise
 
+            # 5. Przypisywanie polityk Leadera
             for resource in resource_types:
                 policy_filename = f"leader_{resource}_policy.json"
                 leader_policy_path = os.path.join('config', 'policies', policy_filename)
@@ -130,6 +154,7 @@ class GroupManager:
                     print(f"Błąd podczas przypisywania polityki '{policy_name}' do użytkownika '{leader}': {e}")
                     raise
 
+            # 6. Dodawanie Leadera do Grupy
             try:
                 self.iam_client.add_user_to_group(
                     GroupName=group_name,

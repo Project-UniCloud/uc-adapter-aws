@@ -1,0 +1,33 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "DenyAllOutsideRequestedRegion",
+            "Effect": "Deny",
+            "NotAction": [
+                "iam:*",
+                "organizations:Describe*",
+                "route53:*",
+                "budgets:*",
+                "waf:*",
+                "cloudfront:*",
+                "sts:*",
+                "s3:ListAllMyBuckets",
+                "s3:GetBucketLocation",
+                "s3:GetAccountPublicAccessBlock",
+                "s3:ListAccessPoints",
+                "s3:CreateBucket",
+                "globalaccelerator:*",
+                "support:*"
+            ],
+            "Resource": "*",
+            "Condition": {
+                "StringNotEquals": {
+                    "aws:RequestedRegion": [
+                        "us-east-1"
+                    ]
+                }
+            }
+        }
+    ]
+}
