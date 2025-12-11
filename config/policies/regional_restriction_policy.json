@@ -16,7 +16,6 @@
                 "s3:GetBucketLocation",
                 "s3:GetAccountPublicAccessBlock",
                 "s3:ListAccessPoints",
-                "s3:CreateBucket",
                 "globalaccelerator:*",
                 "support:*"
             ],
