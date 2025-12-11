@@ -334,6 +334,67 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             message=f"Cleanup completed for group '{group_name}'"
         )
 
+    def AssignPolicies(self, request, context):
+        """
+        Przypisuje polityki inline do grupy lub użytkownika na podstawie listy usług.
+        """
+        # Logowanie parametrów (obsługa pustych stringów dla czytelności)
+        target_info = f"Grupa: {request.groupName}" if request.groupName else f"User: {request.userName}"
+        logging.info(f"🛡️ Przypisywanie polityk dla zasobów: {request.resourceTypes}. Cel: {target_info}")
+
+        try:
+            # Walidacja wejścia
+            if not request.resourceTypes:
+                msg = "Lista typów zasobów (resourceTypes) jest pusta."
+                logging.warning(f"⚠️ {msg}")
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details(msg)
+                return pb2.AssignPoliciesResponse(success=False, message=msg)
+
+            if not request.groupName and not request.userName:
+                msg = "Musisz podać groupName LUB userName."
+                logging.warning(f"⚠️ {msg}")
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details(msg)
+                return pb2.AssignPoliciesResponse(success=False, message=msg)
+
+            # Wywołanie logiki biznesowej (zakładam, że metoda jest w group_manager)
+            # Konwersja pustych stringów gRPC na None dla Pythona
+            g_name = request.groupName if request.groupName else None
+            u_name = request.userName if request.userName else None
+
+            group_manager.assign_policies_to_target(
+                resource_types=list(request.resourceTypes),
+                group_name=g_name,
+                user_name=u_name
+            )
+
+            success_msg = f"Polityki pomyślnie przypisane do {target_info}."
+            logging.info(f"✅ {success_msg}")
+
+            return pb2.AssignPoliciesResponse(
+                success=True,
+                message=success_msg
+            )
+
+        except FileNotFoundError as e:
+            logging.error(f"❌ Nie znaleziono pliku polityki: {e}")
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details(str(e))
+            return pb2.AssignPoliciesResponse(success=False, message=str(e))
+
+        except ClientError as e:
+            logging.error(f"❌ Błąd AWS przy przypisywaniu polityk: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Błąd AWS: {e}")
+            return pb2.AssignPoliciesResponse(success=False, message=str(e))
+
+        except Exception as e:
+            logging.error(f"❌ Nieoczekiwany błąd w AssignPolicies: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Nieoczekiwany błąd: {e}")
+            return pb2.AssignPoliciesResponse(success=False, message=str(e))
+
 
 
 def serve():

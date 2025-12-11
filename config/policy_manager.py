@@ -1,8 +1,10 @@
 import os
 import re
 import logging
+import json
 from pathlib import Path
 from typing import List, Set
+from botocore.exceptions import ClientError
 
 
 class PolicyManager:
@@ -53,3 +55,70 @@ class PolicyManager:
         except Exception as e:
             logging.error(f"❌ Błąd podczas skanowania polityk: {e}")
             return []
+
+def assign_policies_to_target(self, resource_types, group_name=None, user_name=None):
+    """
+    Automatycznie dobiera i przypisuje polityki:
+    - Jeśli podano group_name -> Szuka plików 'student_{resource}_policy.json'
+    - Jeśli podano user_name  -> Szuka plików 'leader_{resource}_policy.json'
+    """
+
+    # 1. Określenie roli i celu na podstawie argumentów
+    if group_name and user_name:
+        raise ValueError("❌ Błąd: Podaj albo group_name, albo user_name - nie oba naraz.")
+
+    if group_name:
+        prefix = "student"  # Grupa = Studenci
+        target_name = group_name
+        target_type = "Group"
+    elif user_name:
+        prefix = "leader"  # Użytkownik = Leader/Prowadzący
+        target_name = user_name
+        target_type = "User"
+    else:
+        raise ValueError("❌ Błąd: Musisz podać group_name lub user_name.")
+
+    print(f"🔄 Rozpoczynam przypisywanie polityk typu '{prefix.upper()}' dla: {target_name} ({target_type})")
+
+    for resource in resource_types:
+        # 2. Budowanie nazwy pliku (np. leader_s3_policy.json lub student_s3_policy.json)
+        policy_filename = f"{prefix}_{resource}_policy.json"
+        policy_path = os.path.join('config', 'policies', policy_filename)
+
+        # 3. Sprawdzenie czy plik istnieje
+        if not os.path.isfile(policy_path):
+            print(f"⚠️ Ostrzeżenie: Plik polityki '{policy_filename}' nie istnieje. Pomijam zasób {resource}.")
+            continue  # Przechodzimy do następnego zasobu zamiast rzucać błąd
+
+        # 4. Wczytanie JSON
+        try:
+            with open(policy_path, 'r') as policy_file:
+                policy_document = json.load(policy_file)
+        except json.JSONDecodeError as e:
+            print(f"❌ Błąd składni JSON w pliku '{policy_filename}': {e}")
+            raise e
+
+        # Nazwa polityki wewnątrz IAM (np. student_s3_policy)
+        policy_name_iam = f"{prefix}_{resource}_policy"
+        policy_json_str = json.dumps(policy_document)
+
+        try:
+            # 5. Przypisanie w zależności od typu celu
+            if target_type == "Group":
+                self.iam_client.put_group_policy(
+                    GroupName=target_name,
+                    PolicyName=policy_name_iam,
+                    PolicyDocument=policy_json_str
+                )
+            else:  # User
+                self.iam_client.put_user_policy(
+                    UserName=target_name,
+                    PolicyName=policy_name_iam,
+                    PolicyDocument=policy_json_str
+                )
+
+            print(f"   ✅ Sukces: {policy_filename} -> {target_name}")
+
+        except ClientError as e:
+            print(f"   ❌ Błąd AWS przy przypisywaniu '{policy_name_iam}': {e}")
+            raise e
