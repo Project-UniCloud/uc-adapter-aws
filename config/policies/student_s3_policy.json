@@ -2,35 +2,55 @@
     "Version": "2012-10-17",
     "Statement": [
         {
-            "Sid": "NiezbedneDlaKonsoliZebyNieByloBledu",
+            "Sid": "ConsoleVisibility",
             "Effect": "Allow",
             "Action": [
                 "s3:ListAllMyBuckets",
-                "s3:GetBucketLocation"
+                "s3:GetBucketLocation",
+                "s3:GetAccountPublicAccessBlock",
+                "s3:ListAccessPoints"
             ],
             "Resource": "*"
         },
         {
-            "Sid": "PozwolStworzycPustyBucket",
+            "Sid": "AllowCreateAndConfig_NoTagsRequired",
             "Effect": "Allow",
-            "Action": "s3:CreateBucket",
+            "Action": [
+                "s3:CreateBucket",
+                "s3:PutEncryptionConfiguration",
+                "s3:GetEncryptionConfiguration",
+                "s3:PutBucketVersioning",
+                "s3:GetBucketVersioning",
+                "s3:PutBucketPublicAccessBlock",
+                "s3:ListBucket*"
+            ],
             "Resource": "arn:aws:s3:::*"
         },
         {
-            "Sid": "PelnyDostepTylkoDoSwoichZasobow",
+            "Sid": "AllowManageObjects_NoTagsRequired",
             "Effect": "Allow",
             "Action": [
-                "s3:ListBucket",
-                "s3:GetObject",
                 "s3:PutObject",
+                "s3:GetObject",
                 "s3:DeleteObject",
+                "s3:AbortMultipartUpload",
+                "s3:PutObjectTagging",
+                "s3:GetObjectTagging",
+                "s3:DeleteObjectTagging"
+            ],
+            "Resource": "arn:aws:s3:::*/*"
+        },
+        {
+            "Sid": "AllowDestructiveActions_ONLY_WITH_TAG",
+            "Effect": "Allow",
+            "Action": [
                 "s3:DeleteBucket",
-                "s3:GetBucketTagging"
+                "s3:PutBucketPolicy",
+                "s3:PutBucketAcl",
+                "s3:PutLifecycleConfiguration",
+                "s3:PutReplicationConfiguration"
             ],
-            "Resource": [
-                "arn:aws:s3:::*",
-                "arn:aws:s3:::*/*"
-            ],
+            "Resource": "arn:aws:s3:::*",
             "Condition": {
                 "StringEquals": {
                     "aws:ResourceTag/CreatedBy": "${aws:username}"
