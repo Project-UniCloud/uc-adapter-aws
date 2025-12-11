@@ -3,6 +3,7 @@ import json
 import time
 import zipfile
 import io
+import os
 from botocore.exceptions import ClientError
 
 
@@ -13,85 +14,60 @@ class AutoTaggingDeployer:
         self.lambda_client = self.session.client('lambda')
         self.events = self.session.client('events')
         self.sts = self.session.client('sts')
-        self.ec2 = self.session.client('ec2')
-        self.s3 = self.session.client('s3')
 
-        # Konfiguracja
+        # Stałe konfiguracyjne
         self.role_name = 'AutoTaggingLambdaRole'
         self.function_name = 'AutoTaggingFunction'
-        self.rule_name = 'AutoTaggingRule'
+        self.rule_name = 'AutoTaggingMultiServiceRule'
         self.log_group_name = f'/aws/lambda/{self.function_name}'
 
     def _cleanup_existing_resources(self):
-        """Usuwa istniejące zasoby przed ponownym wdrożeniem"""
-        print("Cleaning up existing resources...")
+        """Sprząta stare wersje zasobów, aby wdrożenie było czyste."""
+        print("🧹 Czyszczenie starych zasobów...")
 
-        # 1. Usuń regułę EventBridge
+        # 1. Usuń EventBridge Rule
         try:
             targets = self.events.list_targets_by_rule(Rule=self.rule_name)
-            if targets['Targets']:
+            if targets.get('Targets'):
                 self.events.remove_targets(
                     Rule=self.rule_name,
                     Ids=[target['Id'] for target in targets['Targets']]
                 )
             self.events.delete_rule(Name=self.rule_name)
-            print(f"Deleted EventBridge rule: {self.rule_name}")
-        except self.events.exceptions.ResourceNotFoundException:
+            print(f"   - Usunięto regułę EventBridge: {self.rule_name}")
+        except (self.events.exceptions.ResourceNotFoundException, ClientError):
             pass
-        except ClientError as e:
-            print(f"Error deleting EventBridge rule: {e}")
 
         # 2. Usuń funkcję Lambda
         try:
             self.lambda_client.delete_function(FunctionName=self.function_name)
-            print(f"Deleted Lambda function: {self.function_name}")
-        except self.lambda_client.exceptions.ResourceNotFoundException:
+            print(f"   - Usunięto funkcję Lambda: {self.function_name}")
+        except (self.lambda_client.exceptions.ResourceNotFoundException, ClientError):
             pass
-        except ClientError as e:
-            print(f"Error deleting Lambda function: {e}")
 
-        # 3. Usuń grupę logów
+        # 3. Usuń Rolę IAM
         try:
-            logs = self.session.client('logs')
-            logs.delete_log_group(logGroupName=self.log_group_name)
-            print(f"Deleted log group: {self.log_group_name}")
-        except logs.exceptions.ResourceNotFoundException:
-            pass
-        except ClientError as e:
-            print(f"Error deleting log group: {e}")
-
-        # 4. Usuń rolę IAM (zachowaj na końcu)
-        try:
-            # Najpierw usuń inline policies
             policies = self.iam.list_role_policies(RoleName=self.role_name)
             for policy_name in policies['PolicyNames']:
-                self.iam.delete_role_policy(
-                    RoleName=self.role_name,
-                    PolicyName=policy_name
-                )
+                self.iam.delete_role_policy(RoleName=self.role_name, PolicyName=policy_name)
 
-            # Następnie odłącz managed policies
             attached = self.iam.list_attached_role_policies(RoleName=self.role_name)
             for policy in attached['AttachedPolicies']:
-                self.iam.detach_role_policy(
-                    RoleName=self.role_name,
-                    PolicyArn=policy['PolicyArn']
-                )
+                self.iam.detach_role_policy(RoleName=self.role_name, PolicyArn=policy['PolicyArn'])
 
-            # Na końcu usuń rolę
             self.iam.delete_role(RoleName=self.role_name)
-            print(f"Deleted IAM role: {self.role_name}")
-        except self.iam.exceptions.NoSuchEntityException:
+            print(f"   - Usunięto rolę IAM: {self.role_name}")
+        except (self.iam.exceptions.NoSuchEntityException, ClientError):
             pass
-        except ClientError as e:
-            print(f"Error deleting IAM role: {e}")
 
-        # Poczekaj na pełne usunięcie zasobów
-        time.sleep(10)
+        time.sleep(5)  # Krótka przerwa dla AWS API
 
     def _create_lambda_zip(self):
-        """Tworzy plik ZIP z kodem Lambda"""
-        with open('lambda_function.py', 'r') as f:
+        """Pakuje kod funkcji do ZIP."""
+        if not os.path.exists('lambda_function.py'):
+            raise FileNotFoundError("❌ Nie znaleziono pliku lambda_function.py!")
+
+        with open('lambda_function.py', 'r', encoding='utf-8') as f:
             lambda_code = f.read()
 
         buffer = io.BytesIO()
@@ -100,62 +76,58 @@ class AutoTaggingDeployer:
         buffer.seek(0)
         return buffer.read()
 
-    def _wait_for_iam_propagation(self, seconds=10):
-        """Czekaj na propagację zmian IAM"""
-        print(f"Waiting {seconds} seconds for IAM propagation...")
-        time.sleep(seconds)
-
     def create_iam_role(self):
-        """Tworzy rolę IAM dla funkcji Lambda"""
+        """Tworzy rolę IAM z uprawnieniami do tagowania wielu usług."""
+        print(f"🛡️ Tworzenie roli IAM: {self.role_name}...")
+
         trust_policy = {
             "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Effect": "Allow",
-                    "Principal": {
-                        "Service": [
-                            "lambda.amazonaws.com",
-                            "events.amazonaws.com"
-                        ]
-                    },
-                    "Action": "sts:AssumeRole"
-                }
-            ]
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": {"Service": "lambda.amazonaws.com"},
+                "Action": "sts:AssumeRole"
+            }]
         }
 
-        print(f"Creating IAM role {self.role_name}...")
         role = self.iam.create_role(
             RoleName=self.role_name,
             AssumeRolePolicyDocument=json.dumps(trust_policy),
-            Description='Role for auto-tagging Lambda function',
-            Tags=[{'Key': 'auto-tagging', 'Value': 'true'}]
+            Description='Rola dla autotagowania studentow'
         )
         role_arn = role['Role']['Arn']
 
-        self._wait_for_iam_propagation()
+        # Czekamy na propagację roli
+        time.sleep(10)
 
-        # Dołącz managed policies
+        # 1. Podstawowe logi
         self.iam.attach_role_policy(
             RoleName=self.role_name,
             PolicyArn='arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
         )
 
-        # Dodaj custom policy
+        # 2. Custom Policy: Uprawnienia do tagowania WSZYSTKIEGO co obsługujemy
         policy_document = {
             "Version": "2012-10-17",
             "Statement": [
                 {
+                    "Sid": "TaggingServices",
                     "Effect": "Allow",
                     "Action": [
-                        "ec2:CreateTags",
+                        "ec2:CreateTags",  # EC2, VPC, Subnets, etc.
+                        "s3:PutBucketTagging",  # S3
+                        "dynamodb:TagResource",  # DynamoDB
+                        "lambda:TagResource",  # Lambda Functions
+                        "rds:AddTagsToResource",  # RDS Databases
+                        "elasticloadbalancing:AddTags"  # Load Balancers
+                    ],
+                    "Resource": "*"
+                },
+                {
+                    "Sid": "ReadIAMTags",
+                    "Effect": "Allow",
+                    "Action": [
                         "iam:ListUserTags",
-                        "iam:ListRoleTags",
-                        "iam:GetUser",
-                        "iam:GetRole",
-                        "logs:CreateLogGroup",
-                        "logs:CreateLogStream",
-                        "logs:PutLogEvents",
-                        "sts:GetCallerIdentity"
+                        "iam:GetUser"
                     ],
                     "Resource": "*"
                 }
@@ -168,12 +140,11 @@ class AutoTaggingDeployer:
             PolicyDocument=json.dumps(policy_document)
         )
 
-        self._wait_for_iam_propagation()
         return role_arn
 
     def deploy_lambda_function(self, role_arn):
-        """Wdraża funkcję Lambda"""
-        print(f"Deploying Lambda function {self.function_name}...")
+        """Wdraża kod na AWS Lambda."""
+        print(f"⚡ Wdrażanie funkcji Lambda: {self.function_name}...")
 
         response = self.lambda_client.create_function(
             FunctionName=self.function_name,
@@ -181,57 +152,78 @@ class AutoTaggingDeployer:
             Role=role_arn,
             Handler='lambda_function.lambda_handler',
             Code={'ZipFile': self._create_lambda_zip()},
-            Timeout=60,
-            MemorySize=256,
-            Publish=True,
-            Environment={
-                'Variables': {
-                    'LOG_LEVEL': 'INFO'
-                }
-            },
-            Tags={
-                'auto-tagging': 'true',
-                'environment': 'production'
-            }
+            Timeout=60,  # Wydłużony czas (standardowo 3s to za mało)
+            MemorySize=256  # Troszkę więcej pamięci dla boto3
         )
-
-        self._wait_for_iam_propagation(5)
         return response['FunctionArn']
 
     def setup_eventbridge_rule(self, lambda_arn):
-        """Konfiguruje regułę EventBridge"""
+        """Konfiguruje trigger (wyzwalacz) dla Lambdy."""
+        print(f"📡 Konfiguracja EventBridge Rule: {self.rule_name}...")
         account_id = self.sts.get_caller_identity()['Account']
 
-        print(f"Creating EventBridge rule {self.rule_name}...")
-
-        # Poprawiony wzorzec zdarzeń
+        # Definicja zdarzeń, które uruchomią autotagowanie
         event_pattern = {
-            "source": ["aws.ec2"],
+            "source": [
+                "aws.ec2",
+                "aws.s3",
+                "aws.dynamodb",
+                "aws.lambda",
+                "aws.rds",
+                "aws.elasticloadbalancing"
+            ],
             "detail-type": ["AWS API Call via CloudTrail"],
             "detail": {
-                "eventSource": ["ec2.amazonaws.com"],
-                "eventName": ["RunInstances"]
+                "eventSource": [
+                    "ec2.amazonaws.com",
+                    "s3.amazonaws.com",
+                    "dynamodb.amazonaws.com",
+                    "lambda.amazonaws.com",
+                    "rds.amazonaws.com",
+                    "elasticloadbalancing.amazonaws.com"
+                ],
+                "eventName": [
+                    # --- EC2 & Sieć ---
+                    "RunInstances",
+                    "CreateVpc",
+                    "CreateSubnet",
+                    "CreateNatGateway",
+                    "AllocateAddress",  # Elastic IP
+                    "CreateVolume",  # Dyski EBS
+                    "CreateInternetGateway",
+
+                    # --- S3 ---
+                    "CreateBucket",
+
+                    # --- DynamoDB ---
+                    "CreateTable",
+
+                    # --- Lambda ---
+                    "CreateFunction20150331",
+                    "CreateFunction",
+
+                    # --- RDS ---
+                    "CreateDBInstance",
+
+                    # --- Load Balancers ---
+                    "CreateLoadBalancer"
+                ]
             }
         }
 
-        # Utwórz regułę
         self.events.put_rule(
             Name=self.rule_name,
             EventPattern=json.dumps(event_pattern),
             State='ENABLED',
-            Description='Triggers auto-tagging of new EC2 instances'
+            Description='Automatyczne tagowanie EC2, S3, Dynamo, RDS, Lambda, Network'
         )
 
-        # Dodaj target (uproszczony)
         self.events.put_targets(
             Rule=self.rule_name,
-            Targets=[{
-                'Id': '1',
-                'Arn': lambda_arn
-            }]
+            Targets=[{'Id': '1', 'Arn': lambda_arn}]
         )
 
-        # Nadaj uprawnienia
+        # Pozwolenie EventBridge na wywołanie Lambdy
         try:
             self.lambda_client.add_permission(
                 FunctionName=self.function_name,
@@ -245,32 +237,26 @@ class AutoTaggingDeployer:
                 raise
 
     def deploy(self):
-        """Główna metoda wdrażająca całe rozwiązanie"""
         try:
-            # 1. Wyczyść istniejące zasoby
             self._cleanup_existing_resources()
-
-            # 2. Utwórz rolę IAM
             role_arn = self.create_iam_role()
-            print(f"IAM Role ARN: {role_arn}")
 
-            # 3. Wdróż funkcję Lambda
+            # Czekamy dodatkowo na stabilizację IAM przed utworzeniem funkcji
+            print("⏳ Czekam na stabilizację uprawnień IAM...")
+            time.sleep(10)
+
             lambda_arn = self.deploy_lambda_function(role_arn)
-            print(f"Lambda Function ARN: {lambda_arn}")
-
-            # 4. Skonfiguruj EventBridge
             self.setup_eventbridge_rule(lambda_arn)
 
-            print("\n=== Deployment completed successfully ===")
-            print(f"Lambda Function: {lambda_arn}")
-            print(f"EventBridge Rule: {self.rule_name}")
-            print(f"IAM Role: {role_arn}")
+            print("\n✅✅ WDROŻENIE ZAKOŃCZONE SUKCESEM ✅✅")
+            print("System autotagowania nasłuchuje na zdarzenia tworzenia zasobów.")
 
         except Exception as e:
-            print(f"\n!!! Deployment failed: {str(e)}")
+            print(f"\n❌ WDROŻENIE NIEUDANE: {str(e)}")
             raise
 
 
 if __name__ == '__main__':
+    # Uruchomienie w regionie us-east-1 (tam gdzie masz polityki)
     deployer = AutoTaggingDeployer(region='us-east-1')
     deployer.deploy()

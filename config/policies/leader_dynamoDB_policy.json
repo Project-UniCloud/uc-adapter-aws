@@ -2,33 +2,32 @@
     "Version": "2012-10-17",
     "Statement": [
         {
-            "Sid": "WidocznoscListyTabelBezBledow",
+            "Sid": "ConsoleAndMetricsVisibility",
             "Effect": "Allow",
             "Action": [
-                "dynamodb:ListTables"
+                "dynamodb:ListTables",
+                "dynamodb:DescribeLimits",
+                "dynamodb:DescribeEndpoints",
+                "application-autoscaling:DescribeScalableTargets",
+                "application-autoscaling:DescribeScalingPolicies",
+                "application-autoscaling:DescribeScalingActivities",
+                "cloudwatch:GetMetricStatistics",
+                "cloudwatch:ListMetrics",
+                "cloudwatch:GetMetricData",
+                "cloudwatch:DescribeAlarms"
             ],
             "Resource": "*"
         },
         {
-            "Sid": "PozwolStworzycPustaTabele",
+            "Sid": "CreateTable",
             "Effect": "Allow",
             "Action": "dynamodb:CreateTable",
             "Resource": "arn:aws:dynamodb:*:*:table/*"
         },
         {
-            "Sid": "PelnyDostepJesliZgadzaSieGrupa",
+            "Sid": "FullControlOnOwnTables",
             "Effect": "Allow",
-            "Action": [
-                "dynamodb:DescribeTable",
-                "dynamodb:DeleteTable",
-                "dynamodb:PutItem",
-                "dynamodb:GetItem",
-                "dynamodb:UpdateItem",
-                "dynamodb:DeleteItem",
-                "dynamodb:Query",
-                "dynamodb:Scan",
-                "dynamodb:ListTagsOfResource"
-            ],
+            "Action": "dynamodb:*",
             "Resource": "arn:aws:dynamodb:*:*:table/*",
             "Condition": {
                 "StringEquals": {
