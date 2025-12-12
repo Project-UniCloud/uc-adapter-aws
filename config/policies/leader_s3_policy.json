@@ -13,7 +13,7 @@
             "Resource": "*"
         },
         {
-            "Sid": "AllowCreateAndConfig_NoTagsRequired",
+            "Sid": "AllowCreateAndConfigNoTagsRequired",
             "Effect": "Allow",
             "Action": [
                 "s3:CreateBucket",
@@ -27,7 +27,7 @@
             "Resource": "arn:aws:s3:::*"
         },
         {
-            "Sid": "AllowManageObjects_NoTagsRequired",
+            "Sid": "AllowManageObjectsNoTagsRequired",
             "Effect": "Allow",
             "Action": [
                 "s3:PutObject",
@@ -41,7 +41,7 @@
             "Resource": "arn:aws:s3:::*/*"
         },
         {
-            "Sid": "AllowDestructiveActions_ONLY_WITH_TAG",
+            "Sid": "AllowDestructiveActionsONLYWITHTAG",
             "Effect": "Allow",
             "Action": [
                 "s3:DeleteBucket",
