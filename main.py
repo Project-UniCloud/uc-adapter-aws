@@ -30,11 +30,8 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
         logging.info("🔍 Pobieranie listy dostępnych usług na podstawie polityk")
         try:
             services_list = self.policy_manager.get_available_services()
-
             response = pb2.GetAvailableServicesResponse()
-            # Dodajemy elementy listy do pola repeated w protobuf
             response.services.extend(services_list)
-
             return response
         except Exception as e:
             logging.error(f"❌ Błąd w GetAvailableServices: {e}", exc_info=True)
@@ -108,9 +105,9 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
                 context.set_details(msg)
                 return pb2.GroupCreatedResponse()
 
+            # Wywołujemy nową, ulepszoną metodę z GroupManager
             group_manager.create_group_with_leaders(
                 resource_types=list(request.resourceTypes),
-                # ZMIANA: resourceTypes (liczba mnoga) i rzutowanie na listę
                 leaders=list(request.leaders),
                 group_name=request.groupName
             )
@@ -136,15 +133,12 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             return pb2.GroupCreatedResponse()
 
     def GetResourceCount(self, request, context):
-        """
-        Zwraca liczbę zasobów posiadających tag Group=<groupName> dla wskazanego typu zasobu (service), np. "ec2", "s3".
-        """
         group_name = request.groupName
         resource_type = (request.resourceType or "").strip().lower()
         logging.info(f"📦 Zliczanie zasobów dla grupy='{group_name}', typ='{resource_type}'")
         if not resource_type:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details("Pole resourceType nie może być puste (np. 'ec2', 's3').")
+            context.set_details("Pole resourceType nie może być puste.")
             return pb2.ResourceCountResponse()
 
         try:
@@ -182,14 +176,12 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
                 start_date=request.startDate,
                 end_date=request.endDate or None
             )
-
             response = pb2.GroupServiceBreakdownResponse()
             response.total = breakdown['total']
             for service_name, amount in breakdown['by_service'].items():
                 service_cost = response.breakdown.add()
                 service_cost.serviceName = service_name
                 service_cost.amount = amount
-
             return response
         except Exception as e:
             logging.error(f"❌ Błąd w GetGroupCostWithServiceBreakdown: {e}", exc_info=True)
@@ -259,7 +251,6 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details("Pole groupName nie może być puste.")
             return pb2.GroupCostMapResponse()
-
         try:
             costs = limits_manager.get_group_cost_last_6_months_by_service(group_tag_value=group_name)
             resp = pb2.GroupCostMapResponse()
@@ -279,7 +270,6 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details("Pole groupName nie może być puste.")
             return pb2.GroupMonthlyCostsResponse()
-
         try:
             costs = limits_manager.get_group_monthly_costs_last_6_months(group_tag_value=group_name)
             resp = pb2.GroupMonthlyCostsResponse()
@@ -295,6 +285,7 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
     def RemoveGroup(self, request, context):
         logging.info(f"🗑️ Removing IAM group and its users: {request.groupName}")
         try:
+            # Teraz ta metoda usunie też grupę Liderów!
             removed_users, message = group_manager.delete_group_and_users(request.groupName)
             return pb2.RemoveGroupResponse(success=True, removedUsers=removed_users, message=message)
         except ClientError as e:
@@ -312,7 +303,7 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
         logging.info(f"Starting cleanup for group: {request.groupName}")
         group_name = request.groupName
 
-        # 1️⃣ znajdź zasoby
+        # 1️⃣ znajdź zasoby (tagowane nazwą grupy, więc zadziała dla liderów i studentów)
         resources = find_resources_by_group("Group", group_name)
 
         if not resources:
@@ -321,7 +312,7 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
                 message=f"No resources found for group '{group_name}'"
             )
 
-        # 2️⃣ usuń zasoby (jeśli deleteResources=True)
+        # 2️⃣ usuń zasoby
         deleted = []
         for r in resources:
             msg = delete_resource(r)
@@ -338,12 +329,11 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
         """
         Przypisuje polityki inline do grupy lub użytkownika na podstawie listy usług.
         """
-        # Logowanie parametrów (obsługa pustych stringów dla czytelności)
+        # Logowanie parametrów
         target_info = f"Grupa: {request.groupName}" if request.groupName else f"User: {request.userName}"
         logging.info(f"🛡️ Przypisywanie polityk dla zasobów: {request.resourceTypes}. Cel: {target_info}")
 
         try:
-            # Walidacja wejścia
             if not request.resourceTypes:
                 msg = "Lista typów zasobów (resourceTypes) jest pusta."
                 logging.warning(f"⚠️ {msg}")
@@ -358,12 +348,12 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
                 context.set_details(msg)
                 return pb2.AssignPoliciesResponse(success=False, message=msg)
 
-            # Wywołanie logiki biznesowej (używamy PolicyManager zamiast GroupManager)
-            # Konwersja pustych stringów gRPC na None dla Pythona
+            # Konwersja pustych stringów gRPC na None
             g_name = request.groupName if request.groupName else None
             u_name = request.userName if request.userName else None
 
-            self.policy_manager.assign_policies_to_target(
+            # Metoda Assign w GroupManager obsłuży teraz minifikację
+            group_manager.assign_policies_to_target(
                 resource_types=list(request.resourceTypes),
                 group_name=g_name,
                 user_name=u_name
@@ -395,8 +385,6 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_details(f"Nieoczekiwany błąd: {e}")
             return pb2.AssignPoliciesResponse(success=False, message=str(e))
 
-
-
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     pb2_grpc.add_CloudAdapterServicer_to_server(CloudAdapterServicer(), server)
@@ -404,7 +392,6 @@ def serve():
     server.start()
     logging.info("🚀 Serwer działa na porcie 50051...")
     server.wait_for_termination()
-
 
 if __name__ == '__main__':
     serve()
