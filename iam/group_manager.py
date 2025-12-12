@@ -32,7 +32,7 @@ class GroupManager:
         - Jeśli podano user_name -> IGNORUJEMY (zgodność z gRPC, ale nie używamy już inline user policies).
         - Jeśli podano group_name -> Przypisujemy polityki 'student_' do tej grupy ORAZ 'leader_' do grupy 'Leaders-{group_name}'.
         """
-
+        group_name = _normalize_name(group_name) if group_name else None
         # 1. Obsługa starego podejścia (User) - Ignorujemy
         if user_name:
             logging.info(f"ℹ️ Wywołano AssignPolicies dla użytkownika '{user_name}'. "
@@ -74,6 +74,7 @@ class GroupManager:
 
     def _apply_policies_from_files(self, target_group, resource_types, policy_prefix):
         """Metoda pomocnicza: iteruje po zasobach i wgrywa pliki JSON do wskazanej grupy."""
+        target_group = _normalize_name(target_group)
         for resource in resource_types:
             # Obsługa nazewnictwa plików
             if resource == "region":
