@@ -16,6 +16,7 @@ class GroupManager:
         self.iam_client = boto3.client('iam')
 
     def group_exists(self, group_name):
+        group_name = _normalize_name(group_name)
         try:
             self.iam_client.get_group(GroupName=group_name)
             return True
