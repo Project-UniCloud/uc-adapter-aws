@@ -23,8 +23,7 @@ class UserManager:
         created_users = []
         group_name = _normalize_username(group_name)
         for user in users:
-            raw_username = f"{user}-{group_name}"
-            username = _normalize_username(raw_username)
+            username = _normalize_username(user)
 
             try:
                 self.iam_client.create_user(
@@ -36,7 +35,7 @@ class UserManager:
 
                 self.iam_client.create_login_profile(
                     UserName=username,
-                    Password=group_name,
+                    Password=f"{username}_password123$",
                     PasswordResetRequired=True
                 )
                 print(f"Ustawiono hasło '{group_name}' dla użytkownika '{username}' (wymagana zmiana przy logowaniu)")

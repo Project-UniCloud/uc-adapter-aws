@@ -358,12 +358,12 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
                 context.set_details(msg)
                 return pb2.AssignPoliciesResponse(success=False, message=msg)
 
-            # Wywołanie logiki biznesowej (zakładam, że metoda jest w group_manager)
+            # Wywołanie logiki biznesowej (używamy PolicyManager zamiast GroupManager)
             # Konwersja pustych stringów gRPC na None dla Pythona
             g_name = request.groupName if request.groupName else None
             u_name = request.userName if request.userName else None
 
-            group_manager.assign_policies_to_target(
+            self.policy_manager.assign_policies_to_target(
                 resource_types=list(request.resourceTypes),
                 group_name=g_name,
                 user_name=u_name

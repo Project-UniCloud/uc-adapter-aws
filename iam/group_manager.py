@@ -107,8 +107,7 @@ class GroupManager:
 
         # 4. Tworzenie Liderów
         for leader in leaders:
-            raw_leader = f"{leader}-{group_name}"
-            leader = _normalize_name(raw_leader)
+            leader = _normalize_name(leader)
 
             try:
                 self.iam_client.create_user(
@@ -119,7 +118,7 @@ class GroupManager:
 
                 self.iam_client.create_login_profile(
                     UserName=leader,
-                    Password=group_name,
+                    Password=f"{leader}_password123$",
                     PasswordResetRequired=True
                 )
                 print(f"Login profile dla użytkownika '{leader}' został utworzony.")
