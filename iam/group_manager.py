@@ -176,55 +176,109 @@ class GroupManager:
             )
 
     def delete_group_and_users(self, group_name):
-        """Usuwa grupę studentów ORAZ grupę liderów i wszystkich userów."""
+        """
+        Bezpiecznie usuwa grupę studentów ORAZ grupę liderów i wszystkich powiązanych userów.
+        Rozdziela proces na: opróżnianie grup -> usuwanie grup -> usuwanie userów.
+        """
         messages = []
-        removed_users = []
-        group_name = _normalize_name(group_name)
+        # Używamy set (zbiór), aby uniknąć duplikatów (gdy Lider jest w obu grupach)
+        users_to_delete = set()
 
+        group_name = _normalize_name(group_name)
         groups_to_clean = [group_name, f"Leaders-{group_name}"]
 
+        # FAZA 1: Opróżnianie i usuwanie grup
         for g in groups_to_clean:
-            logging.info(f"🧹 Sprzątanie grupy: {g}")
+            logging.info(f"🧹 Przetwarzanie grupy: {g}")
             try:
-                paginator = self.iam_client.get_paginator('get_group')
+                # 1. Pobierz userów i wypisz ich z grupy (Detach)
                 try:
+                    paginator = self.iam_client.get_paginator('get_group')
                     for page in paginator.paginate(GroupName=g):
                         for u in page['Users']:
                             u_name = u['UserName']
-                            self.iam_client.remove_user_from_group(GroupName=g, UserName=u_name)
-
-                            # Logika usuwania usera
-                            try:
-                                self.iam_client.delete_login_profile(UserName=u_name)
-                            except ClientError:
-                                pass
+                            users_to_delete.add(u_name)  # Dodaj do listy "do usunięcia później"
 
                             try:
-                                p_list = self.iam_client.list_user_policies(UserName=u_name)
-                                for p_name in p_list['PolicyNames']:
-                                    self.iam_client.delete_user_policy(UserName=u_name, PolicyName=p_name)
-                                self.iam_client.delete_user(UserName=u_name)
-                                removed_users.append(u_name)
-                            except ClientError:
-                                pass
+                                self.iam_client.remove_user_from_group(GroupName=g, UserName=u_name)
+                            except ClientError as e:
+                                if e.response['Error']['Code'] == 'NoSuchEntity':
+                                    pass  # User już nie istnieje lub nie jest w grupie
+                                else:
+                                    logging.warning(f"Błąd wypisywania {u_name} z {g}: {e}")
 
                 except ClientError as e:
                     if e.response['Error']['Code'] == 'NoSuchEntity':
-                        continue
+                        logging.info(f"Grupa {g} już nie istnieje. Pomijam.")
+                        continue  # Przejdź do następnej grupy
                     raise e
 
-                # Usuwanie polityk grupy
-                p_res = self.iam_client.list_group_policies(GroupName=g)
-                for p_name in p_res['PolicyNames']:
-                    self.iam_client.delete_group_policy(GroupName=g, PolicyName=p_name)
+                # 2. Usuwanie polityk inline grupy
+                try:
+                    p_res = self.iam_client.list_group_policies(GroupName=g)
+                    for p_name in p_res['PolicyNames']:
+                        self.iam_client.delete_group_policy(GroupName=g, PolicyName=p_name)
+                except Exception as e:
+                    logging.warning(f"Błąd usuwania polityk grupy {g}: {e}")
 
-                # Usuwanie grupy
+                # 3. Usuwanie samej grupy
                 self.iam_client.delete_group(GroupName=g)
                 messages.append(f"Grupa {g} usunięta.")
+                logging.info(f"✅ Usunięto grupę: {g}")
 
             except ClientError as e:
-                msg = f"Błąd przy usuwaniu {g}: {e}"
+                msg = f"Błąd przy usuwaniu grupy {g}: {e}"
                 logging.error(msg)
                 messages.append(msg)
 
-        return removed_users, "; ".join(messages)
+        # FAZA 2: Usuwanie użytkowników (unikalnych)
+        # Teraz, gdy grupy nie istnieją (lub są puste), możemy bezpiecznie usunąć userów
+        logging.info(f"💀 Rozpoczynam usuwanie {len(users_to_delete)} użytkowników...")
+
+        removed_users_list = []
+
+        for u_name in users_to_delete:
+            try:
+                # A. Usuń Profil Logowania (Hasło)
+                try:
+                    self.iam_client.delete_login_profile(UserName=u_name)
+                except ClientError as e:
+                    if e.response['Error']['Code'] != 'NoSuchEntity':
+                        logging.warning(f"Błąd usuwania profilu {u_name}: {e}")
+
+                # B. Usuń Access Keys (Kluczowe! Inaczej będzie DeleteConflict)
+                try:
+                    keys = self.iam_client.list_access_keys(UserName=u_name)
+                    for key in keys['AccessKeyMetadata']:
+                        self.iam_client.delete_access_key(UserName=u_name, AccessKeyId=key['AccessKeyId'])
+                except ClientError as e:
+                    logging.warning(f"Błąd usuwania kluczy {u_name}: {e}")
+
+                # C. Usuń polityki inline użytkownika
+                try:
+                    p_list = self.iam_client.list_user_policies(UserName=u_name)
+                    for p_name in p_list['PolicyNames']:
+                        self.iam_client.delete_user_policy(UserName=u_name, PolicyName=p_name)
+                except ClientError:
+                    pass
+
+                # D. Odepnij polityki zarządzane (Managed Policies) - rzadkie, ale możliwe
+                try:
+                    mp_list = self.iam_client.list_attached_user_policies(UserName=u_name)
+                    for mp in mp_list['AttachedPolicies']:
+                        self.iam_client.detach_user_policy(UserName=u_name, PolicyArn=mp['PolicyArn'])
+                except ClientError:
+                    pass
+
+                # E. Usuń użytkownika
+                self.iam_client.delete_user(UserName=u_name)
+                removed_users_list.append(u_name)
+                logging.info(f"   🗑️ Usunięto usera: {u_name}")
+
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'NoSuchEntity':
+                    logging.info(f"User {u_name} już nie istnieje.")
+                else:
+                    logging.error(f"Nie udało się usunąć usera {u_name}: {e}")
+
+        return removed_users_list, "; ".join(messages)
