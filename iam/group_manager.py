@@ -179,6 +179,7 @@ class GroupManager:
         """Usuwa grupę studentów ORAZ grupę liderów i wszystkich userów."""
         messages = []
         removed_users = []
+        group_name = _normalize_name(group_name)
 
         groups_to_clean = [group_name, f"Leaders-{group_name}"]
 
