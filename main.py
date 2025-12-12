@@ -1,3 +1,4 @@
+import re
 import grpc
 import logging
 from concurrent import futures
@@ -285,7 +286,6 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
     def RemoveGroup(self, request, context):
         logging.info(f"🗑️ Removing IAM group and its users: {request.groupName}")
         try:
-            # Teraz ta metoda usunie też grupę Liderów!
             removed_users, message = group_manager.delete_group_and_users(request.groupName)
             return pb2.RemoveGroupResponse(success=True, removedUsers=removed_users, message=message)
         except ClientError as e:
@@ -300,29 +300,48 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             return pb2.RemoveGroupResponse(success=False, message=str(e))
 
     def CleanupGroupResources(self, request, context):
-        logging.info(f"Starting cleanup for group: {request.groupName}")
-        group_name = request.groupName
+        raw_group_name = request.groupName
+        group_name = re.sub(r'[^a-zA-Z0-9+=,.@_-]', '', raw_group_name)
 
-        # 1️⃣ znajdź zasoby (tagowane nazwą grupy, więc zadziała dla liderów i studentów)
-        resources = find_resources_by_group("Group", group_name)
+        logging.info(f"Starting cleanup for group: '{raw_group_name}' (Normalized tag: '{group_name}')")
+
+        try:
+            resources = find_resources_by_group("Group", group_name)
+        except Exception as e:
+            logging.error(f"❌ Error searching resources: {e}")
+            return pb2.CleanupGroupResponse(success=False, message=f"Search failed: {str(e)}")
 
         if not resources:
+            logging.info(f"No resources found with tag Group={group_name}")
             return pb2.CleanupGroupResponse(
                 success=True,
                 message=f"No resources found for group '{group_name}'"
             )
 
-        # 2️⃣ usuń zasoby
+        # 3. Usuń zasoby
         deleted = []
+        failed = []
+
+        logging.info(f"Found {len(resources)} resources to delete.")
+
         for r in resources:
-            msg = delete_resource(r)
-            deleted.append(msg)
-            logging.info(msg)
+            try:
+                msg = delete_resource(r)
+                deleted.append(msg)
+                logging.info(f"   Deleted: {msg}")
+            except Exception as e:
+                error_msg = f"Failed to delete resource {r.get('ResourceARN', 'unknown')}: {e}"
+                logging.error(error_msg)
+                failed.append(error_msg)
+
+        final_message = f"Cleanup completed. Deleted: {len(deleted)}, Failed: {len(failed)}."
+        if failed:
+            final_message += " Check logs for details."
 
         return pb2.CleanupGroupResponse(
             success=True,
             deletedResources=deleted,
-            message=f"Cleanup completed for group '{group_name}'"
+            message=final_message
         )
 
     def AssignPolicies(self, request, context):
