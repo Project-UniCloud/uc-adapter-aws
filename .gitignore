@@ -173,3 +173,5 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+/adapter_interface_pb2.py
+/protos/proto/adapter_interface_pb2.py
