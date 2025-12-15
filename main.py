@@ -1,5 +1,7 @@
 import grpc
 import logging
+import sys
+import time
 from concurrent import futures
 from dotenv import load_dotenv
 
@@ -16,12 +18,46 @@ from cost.cost_manager import CostManager
 from resources.resource_cleaner import find_resources_by_group, delete_resource
 from config.policy_manager import PolicyManager
 
+# Import System Health Check
+from config.system_health import SystemHealthCheck
+
 # 1. Setup Global Logging
 setup_logger('root')
 logger = logging.getLogger(__name__)
 
 # 2. Load Environment Variables
 load_dotenv()
+
+# Global System Status Flag
+AWS_ONLINE = False
+
+
+def initialize_application():
+    """
+    Bootstrap function to prepare the environment.
+    Runs diagnostics, configures AWS, and determines Online/Offline mode.
+    """
+    global AWS_ONLINE
+
+    print("\n" + "=" * 60)
+    print("      🚀 INITIALIZING AWS ADAPTER SYSTEM      ")
+    print("=" * 60 + "\n")
+
+    # Run Health Check & Auto-Remediation
+    health_checker = SystemHealthCheck()
+
+    # ensure_system_integrity checks connectivity, policies, and deploys infra if missing
+    system_ready = health_checker.ensure_system_integrity()
+
+    if system_ready:
+        AWS_ONLINE = True
+        logger.info("🟢 [STATUS] Mode: ONLINE. Full cloud integration active.")
+    else:
+        AWS_ONLINE = False
+        logger.warning("🟠 [STATUS] Mode: OFFLINE. Running in local/restricted mode.")
+        print("\n⚠️  WARNING: No AWS connection or critical local configuration missing.")
+        print("   You can view logs and manage files, but cloud operations are disabled.\n")
+        time.sleep(2)
 
 
 class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
@@ -30,13 +66,20 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
         Initializes the gRPC Servicer and all backend managers.
         """
         try:
+            # We initialize managers even in Offline mode,
+            # though they might fail if they try to connect strictly in __init__.
+            # Assuming managers handle lazy connection or we catch errors here.
             self.group_manager = GroupManager()
             self.user_manager = UserManager()
             self.cost_manager = CostManager()
             self.policy_manager = PolicyManager()
-            logger.info("🚀 CloudAdapterServicer initialized successfully.")
+
+            mode = "ONLINE" if AWS_ONLINE else "OFFLINE"
+            logger.info(f"🚀 CloudAdapterServicer initialized successfully (Mode: {mode}).")
         except Exception as e:
             logger.error(f"🔥 Critical Error initializing managers: {e}")
+            # If initialization fails, we might want to exit or run in a broken state
+            # depending on resilience requirements. Here we re-raise.
             raise e
 
     # ==========================================
@@ -45,7 +88,8 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
 
     def GetStatus(self, request, context):
         logger.info("🔍 Health Check requested")
-        return pb2.StatusResponse(isHealthy=True)
+        # Return the actual global status determined at startup
+        return pb2.StatusResponse(isHealthy=AWS_ONLINE)
 
     def GetAvailableServices(self, request, context):
         logger.info("🔍 Request: GetAvailableServices")
@@ -66,6 +110,11 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
 
     def GroupExists(self, request, context):
         logger.info(f"🔍 Request: GroupExists (Name: {request.groupName})")
+        if not AWS_ONLINE:
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            context.set_details("System is OFFLINE")
+            return pb2.GroupExistsResponse()
+
         try:
             exists = self.group_manager.group_exists(request.groupName)
             return pb2.GroupExistsResponse(exists=exists)
@@ -76,6 +125,11 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
 
     def CreateGroupWithLeaders(self, request, context):
         logger.info(f"🏗️ Request: CreateGroup '{request.groupName}' with resources: {request.resourceTypes}")
+        if not AWS_ONLINE:
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            context.set_details("System is OFFLINE")
+            return pb2.GroupCreatedResponse()
+
         try:
             if not request.leaders or not request.resourceTypes:
                 msg = "Leaders list and Resource Types list cannot be empty."
@@ -99,6 +153,11 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
 
     def CreateUsersForGroup(self, request, context):
         logger.info(f"👥 Request: CreateUsersForGroup (Group: {request.groupName})")
+        if not AWS_ONLINE:
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            context.set_details("System is OFFLINE")
+            return pb2.CreateUsersForGroupResponse()
+
         try:
             if not request.users:
                 msg = "User list is empty."
@@ -120,6 +179,11 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
     def AssignPolicies(self, request, context):
         target = f"Group: {request.groupName}" if request.groupName else "Unknown"
         logger.info(f"🛡️ Request: AssignPolicies to {target}. Resources: {request.resourceTypes}")
+
+        if not AWS_ONLINE:
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            return pb2.AssignPoliciesResponse(success=False, message="Offline Mode")
+
         try:
             self.group_manager.assign_policies_to_target(
                 resource_types=list(request.resourceTypes),
@@ -134,6 +198,11 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
 
     def RemoveGroup(self, request, context):
         logger.info(f"🗑️ Request: RemoveGroup (Name: {request.groupName})")
+
+        if not AWS_ONLINE:
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            return pb2.RemoveGroupResponse(success=False, message="Offline Mode")
+
         try:
             removed_users, msg = self.group_manager.delete_group_and_users(request.groupName)
             return pb2.RemoveGroupResponse(
@@ -152,11 +221,15 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
     # ==========================================
 
     def CleanupGroupResources(self, request, context):
-        # Normalize strictly for logging and consistency, cleaner does it too
+        # Normalize strictly for logging and consistency
         raw_name = request.groupName
         norm_name = normalize_name(raw_name)
 
         logger.info(f"🧹 Request: CleanupGroupResources for '{raw_name}' (Tag: '{norm_name}')")
+
+        if not AWS_ONLINE:
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            return pb2.CleanupGroupResponse(success=False, message="Offline Mode")
 
         try:
             resources = find_resources_by_group("Group", norm_name)
@@ -179,13 +252,15 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
 
         except Exception as e:
             logger.error(f"❌ Error during cleanup: {e}", exc_info=True)
-            # We return success=False but don't crash the server
             return pb2.CleanupGroupResponse(success=False, message=str(e))
 
     def GetResourceCount(self, request, context):
         norm_name = normalize_name(request.groupName)
         res_type = (request.resourceType or "").strip().lower()
         logger.info(f"📦 Request: GetResourceCount for '{norm_name}', type='{res_type}'")
+
+        if not AWS_ONLINE:
+            return pb2.ResourceCountResponse(count=0)
 
         try:
             resources = find_resources_by_group("Group", norm_name)
@@ -202,6 +277,9 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
     def GetTotalCostForGroup(self, request, context):
         group_tag = normalize_name(request.groupName)
         logger.info(f"💰 Request: Cost for Group '{group_tag}'")
+
+        if not AWS_ONLINE: return pb2.CostResponse(amount=0.0)
+
         try:
             cost = self.cost_manager.get_total_cost_for_group(
                 group_tag_value=group_tag,
@@ -217,6 +295,9 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
     def GetGroupCostWithServiceBreakdown(self, request, context):
         group_tag = normalize_name(request.groupName)
         logger.info(f"💰 Request: Cost Breakdown for Group '{group_tag}'")
+
+        if not AWS_ONLINE: return pb2.GroupServiceBreakdownResponse()
+
         try:
             data = self.cost_manager.get_group_cost_with_service_breakdown(
                 group_tag_value=group_tag,
@@ -235,6 +316,9 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
 
     def GetTotalCostsForAllGroups(self, request, context):
         logger.info("📊 Request: Total Costs For All Groups")
+
+        if not AWS_ONLINE: return pb2.AllGroupsCostResponse()
+
         try:
             data = self.cost_manager.get_total_costs_for_all_groups(
                 start_date=request.startDate,
@@ -251,6 +335,9 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
 
     def GetTotalCost(self, request, context):
         logger.info("🌐 Request: Global AWS Cost")
+
+        if not AWS_ONLINE: return pb2.CostResponse(amount=0.0)
+
         try:
             cost = self.cost_manager.get_total_aws_cost(
                 start_date=request.startDate,
@@ -264,6 +351,9 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
 
     def GetTotalCostWithServiceBreakdown(self, request, context):
         logger.info("🧾 Request: Global AWS Cost Breakdown")
+
+        if not AWS_ONLINE: return pb2.GroupServiceBreakdownResponse()
+
         try:
             data = self.cost_manager.get_total_cost_with_service_breakdown(
                 start_date=request.startDate,
@@ -281,6 +371,9 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
     def GetGroupCostsLast6MonthsByService(self, request, context):
         group_tag = normalize_name(request.groupName)
         logger.info(f"🗓️ Request: 6-Month History for '{group_tag}'")
+
+        if not AWS_ONLINE: return pb2.GroupCostMapResponse()
+
         try:
             data = self.cost_manager.get_group_cost_last_6_months_by_service(group_tag)
             resp = pb2.GroupCostMapResponse()
@@ -294,6 +387,9 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
     def GetGroupMonthlyCostsLast6Months(self, request, context):
         group_tag = normalize_name(request.groupName)
         logger.info(f"📅 Request: 6-Month Trend for '{group_tag}'")
+
+        if not AWS_ONLINE: return pb2.GroupMonthlyCostsResponse()
+
         try:
             data = self.cost_manager.get_group_monthly_costs_last_6_months(group_tag)
             resp = pb2.GroupMonthlyCostsResponse()
@@ -306,6 +402,9 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
 
 
 def serve():
+    """
+    Starts the gRPC server.
+    """
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     pb2_grpc.add_CloudAdapterServicer_to_server(CloudAdapterServicer(), server)
     server.add_insecure_port('[::]:50051')
@@ -315,4 +414,8 @@ def serve():
 
 
 if __name__ == '__main__':
+    # 1. Bootstrap System (Health Check & Auto-Fix)
+    initialize_application()
+
+    # 2. Start gRPC Server
     serve()
