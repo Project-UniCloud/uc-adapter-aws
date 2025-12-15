@@ -144,7 +144,7 @@ You must create **TWO** policy files in ```bash config/policies/.``` If you miss
    * **Crucial:** Add a ```Condition``` ensuring they can only modify resources tagged with their username.
 2. ```leader_sns_policy.json```:
    * Allow actions for the leader (usually broader access).
-   * Add a ```Condition``` matching the ```` Group``` tag.
+   * Add a ```Condition``` matching the ``` Group``` tag.
 
 **Step 2: Update Auto-Tagging (The Cost Layer)**
 The system relies on a Lambda function to apply tags immediately upon resource creation.

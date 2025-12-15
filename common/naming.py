@@ -1,25 +1,35 @@
 import re
+import unicodedata
 
 
 def normalize_name(name: str) -> str:
     """
     Standardizes names for IAM Groups, Users, and Tags to ensure AWS compatibility.
 
-    Allowed characters in AWS IAM names and tags are usually:
-    a-z, A-Z, 0-9, plus symbols: + = , . @ _ -
-
-    This function removes any character that is NOT in this allowed set.
-    It ensures that 'Lab Group 1' becomes 'LabGroup1' (or similar) to match AWS tags.
+    Transformation logic:
+    1. Transliterates local characters (e.g., 'Łódź' -> 'Lodz').
+    2. Replaces spaces and whitespace with hyphens (-).
+    3. Removes any character NOT allowed in AWS IAM: a-z, A-Z, 0-9, + = , . @ _ -
+    4. Collapses multiple hyphens into one (e.g., 'A--B' -> 'A-B').
+    5. Strips leading/trailing hyphens or underscores.
 
     Args:
-        name (str): The raw input name (e.g., from user input).
+        name (str): The raw input name (e.g., 'Grupa Łódź #1').
 
     Returns:
-        str: The sanitized name safe for AWS resources.
+        str: A sanitized, AWS-safe name (e.g., 'Grupa-Lodz-1').
     """
     if not name:
         return ""
 
-    # We remove any character that is NOT in the allowed set.
-    # Note: We preserve underscores (_) and hyphens (-).
-    return re.sub(r'[^a-zA-Z0-9+=,.@_-]', '', name)
+    normalized = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('utf-8')
+
+    normalized = re.sub(r'\s+', '-', normalized)
+
+    cleaned = re.sub(r'[^a-zA-Z0-9+=,.@_-]', '', normalized)
+
+    cleaned = re.sub(r'-+', '-', cleaned)
+
+    cleaned = cleaned.strip('-_')
+
+    return cleaned
