@@ -4,6 +4,9 @@ import boto3
 import time
 import logging
 from botocore.exceptions import ClientError
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Import gRPC stubs
 import adapter_interface_pb2 as pb2

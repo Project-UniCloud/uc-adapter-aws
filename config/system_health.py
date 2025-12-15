@@ -134,12 +134,13 @@ class SystemHealthCheck:
                 MinimumPasswordLength=8,
                 RequireSymbols=False,
                 RequireNumbers=True,
-                RequireUppercase=True,
-                RequireLowercase=True,
-                AllowUsersToChangePassword=True,  # Key setting
+                RequireUppercaseCharacters=True,
+                RequireLowercaseCharacters=True,
+                AllowUsersToChangePassword=True,
                 HardExpiry=False
             )
-        except ClientError:
+        except ClientError as e:
+            logger.warning(f"   ⚠️ Could not update password policy: {e}")
             pass
 
     def _check_iam_quotas(self):
