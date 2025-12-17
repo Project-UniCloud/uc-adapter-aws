@@ -1,416 +1,421 @@
-import re
 import grpc
 import logging
+import sys
+import time
 from concurrent import futures
 from dotenv import load_dotenv
-from botocore.exceptions import ClientError
 
+# gRPC Imports (Ensure protobuf files are generated)
 import adapter_interface_pb2_grpc as pb2_grpc
 import adapter_interface_pb2 as pb2
 
+# Logic Imports
+from common.naming import normalize_name
+from common.logger import setup_logger
 from iam.group_manager import GroupManager
 from iam.user_manager import UserManager
-from cost_monitoring import limit_manager as limits_manager
-from clean_resources.cloud_adapter_server import find_resources_by_group, delete_resource
+from cost.cost_manager import CostManager
+from resources.resource_cleaner import find_resources_by_group, delete_resource
 from config.policy_manager import PolicyManager
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s'
-)
+# Import System Health Check
+from config.system_health import SystemHealthCheck
 
+# 1. Setup Global Logging
+setup_logger('root')
+logger = logging.getLogger(__name__)
+
+# 2. Load Environment Variables
 load_dotenv()
-group_manager = GroupManager()
+
+# Global System Status Flag
+AWS_ONLINE = False
+
+
+def initialize_application():
+    """
+    Bootstrap function to prepare the environment.
+    Runs diagnostics, configures AWS, and determines Online/Offline mode.
+    """
+    global AWS_ONLINE
+
+    print("\n" + "=" * 60)
+    print("      🚀 INITIALIZING AWS ADAPTER SYSTEM      ")
+    print("=" * 60 + "\n")
+
+    # Run Health Check & Auto-Remediation
+    health_checker = SystemHealthCheck()
+
+    # ensure_system_integrity checks connectivity, policies, and deploys infra if missing
+    system_ready = health_checker.ensure_system_integrity()
+
+    if system_ready:
+        AWS_ONLINE = True
+        logger.info("🟢 [STATUS] Mode: ONLINE. Full cloud integration active.")
+    else:
+        AWS_ONLINE = False
+        logger.warning("🟠 [STATUS] Mode: OFFLINE. Running in local/restricted mode.")
+        print("\n⚠️  WARNING: No AWS connection or critical local configuration missing.")
+        print("   You can view logs and manage files, but cloud operations are disabled.\n")
+        time.sleep(2)
+
 
 class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
     def __init__(self):
-        self.user_manager = UserManager()
-        self.policy_manager = PolicyManager()
+        """
+        Initializes the gRPC Servicer and all backend managers.
+        """
+        try:
+            # We initialize managers even in Offline mode,
+            # though they might fail if they try to connect strictly in __init__.
+            # Assuming managers handle lazy connection or we catch errors here.
+            self.group_manager = GroupManager()
+            self.user_manager = UserManager()
+            self.cost_manager = CostManager()
+            self.policy_manager = PolicyManager()
+
+            mode = "ONLINE" if AWS_ONLINE else "OFFLINE"
+            logger.info(f"🚀 CloudAdapterServicer initialized successfully (Mode: {mode}).")
+        except Exception as e:
+            logger.error(f"🔥 Critical Error initializing managers: {e}")
+            # If initialization fails, we might want to exit or run in a broken state
+            # depending on resilience requirements. Here we re-raise.
+            raise e
+
+    # ==========================================
+    # HEALTH & CONFIG
+    # ==========================================
+
+    def GetStatus(self, request, context):
+        logger.info("🔍 Health Check requested")
+        # Return the actual global status determined at startup
+        return pb2.StatusResponse(isHealthy=AWS_ONLINE)
 
     def GetAvailableServices(self, request, context):
-        logging.info("🔍 Pobieranie listy dostępnych usług na podstawie polityk")
+        logger.info("🔍 Request: GetAvailableServices")
         try:
             services_list = self.policy_manager.get_available_services()
             response = pb2.GetAvailableServicesResponse()
             response.services.extend(services_list)
             return response
         except Exception as e:
-            logging.error(f"❌ Błąd w GetAvailableServices: {e}", exc_info=True)
+            logger.error(f"❌ Error fetching services: {e}", exc_info=True)
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Błąd podczas pobierania usług: {e}")
+            context.set_details(f"Internal error: {e}")
             return pb2.GetAvailableServicesResponse()
 
-    def GetStatus(self, request, context):
-        logging.info("🔍 Sprawdzanie statusu serwera")
-        response = pb2.StatusResponse()
-        response.isHealthy = True
-        return response
+    # ==========================================
+    # GROUP & USER MANAGEMENT
+    # ==========================================
 
     def GroupExists(self, request, context):
-        logging.info(f"🔍 Sprawdzanie czy grupa istnieje: {request.groupName}")
-        try:
-            group_exists = group_manager.group_exists(group_name=request.groupName)
-            response = pb2.GroupExistsResponse()
-            response.exists = group_exists
-            return response
-        except Exception as e:
-            logging.error(f"❌ Błąd w GroupExists: {e}", exc_info=True)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Błąd podczas sprawdzania istnienia grupy: {e}")
+        logger.info(f"🔍 Request: GroupExists (Name: {request.groupName})")
+        if not AWS_ONLINE:
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            context.set_details("System is OFFLINE")
             return pb2.GroupExistsResponse()
 
-    def CreateUsersForGroup(self, request, context):
-        logging.info(f"👥 Tworzenie użytkowników dla grupy: {request.groupName}")
         try:
-            if not request.users:
-                msg = "Lista użytkowników jest pusta"
-                logging.warning(f"⚠️ {msg}")
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details(msg)
-                return pb2.CreateUsersForGroupResponse()
-
-            result_msg = self.user_manager.create_users_for_group(
-                users=list(request.users),
-                group_name=request.groupName
-            )
-            response = pb2.CreateUsersForGroupResponse()
-            response.message = result_msg
-            return response
-        except ClientError as e:
-            logging.error(f"❌ Błąd AWS (CreateUsersForGroup): {e}", exc_info=True)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Błąd AWS: {e}")
-            return pb2.CreateUsersForGroupResponse()
+            exists = self.group_manager.group_exists(request.groupName)
+            return pb2.GroupExistsResponse(exists=exists)
         except Exception as e:
-            logging.error(f"❌ Błąd w CreateUsersForGroup: {e}", exc_info=True)
+            logger.error(f"❌ Error checking group: {e}", exc_info=True)
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Błąd: {e}")
-            return pb2.CreateUsersForGroupResponse()
+            return pb2.GroupExistsResponse()
 
     def CreateGroupWithLeaders(self, request, context):
-        logging.info(
-            f"🏗️ Tworzenie grupy '{request.groupName}' dla zasobów: {request.resourceTypes} z liderami: {request.leaders}")
+        logger.info(f"🏗️ Request: CreateGroup '{request.groupName}' with resources: {request.resourceTypes}")
+        if not AWS_ONLINE:
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            context.set_details("System is OFFLINE")
+            return pb2.GroupCreatedResponse()
 
         try:
-            if not request.leaders:
-                msg = "Lista liderów jest pusta"
-                logging.warning(f"⚠️ {msg}")
+            if not request.leaders or not request.resourceTypes:
+                msg = "Leaders list and Resource Types list cannot be empty."
+                logger.warning(f"⚠️ Validation failed: {msg}")
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details(msg)
                 return pb2.GroupCreatedResponse()
 
-            if not request.resourceTypes:
-                msg = "Lista typów zasobów (resourceTypes) jest pusta"
-                logging.warning(f"⚠️ {msg}")
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details(msg)
-                return pb2.GroupCreatedResponse()
-
-            # Wywołujemy nową, ulepszoną metodę z GroupManager
-            group_manager.create_group_with_leaders(
+            self.group_manager.create_group_with_leaders(
                 resource_types=list(request.resourceTypes),
                 leaders=list(request.leaders),
                 group_name=request.groupName
             )
+            return pb2.GroupCreatedResponse(groupName=request.groupName)
 
-            response = pb2.GroupCreatedResponse()
-            response.groupName = request.groupName
-            return response
-
-        except FileNotFoundError as e:
-            logging.error(f"❌ Plik nie znaleziony: {e}", exc_info=True)
-            context.set_code(grpc.StatusCode.NOT_FOUND)
+        except Exception as e:
+            logger.error(f"❌ Error creating group: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             return pb2.GroupCreatedResponse()
-        except ClientError as e:
-            logging.error(f"❌ Błąd AWS: {e}", exc_info=True)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Błąd AWS: {e}")
-            return pb2.GroupCreatedResponse()
+
+    def CreateUsersForGroup(self, request, context):
+        logger.info(f"👥 Request: CreateUsersForGroup (Group: {request.groupName})")
+        if not AWS_ONLINE:
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            context.set_details("System is OFFLINE")
+            return pb2.CreateUsersForGroupResponse()
+
+        try:
+            if not request.users:
+                msg = "User list is empty."
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details(msg)
+                return pb2.CreateUsersForGroupResponse()
+
+            msg = self.user_manager.create_users_for_group(
+                users=list(request.users),
+                group_name=request.groupName
+            )
+            return pb2.CreateUsersForGroupResponse(message=msg)
         except Exception as e:
-            logging.error(f"❌ Nieoczekiwany błąd: {e}", exc_info=True)
+            logger.error(f"❌ Error creating users: {e}", exc_info=True)
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Nieoczekiwany błąd: {e}")
-            return pb2.GroupCreatedResponse()
+            context.set_details(str(e))
+            return pb2.CreateUsersForGroupResponse()
+
+    def AssignPolicies(self, request, context):
+        target = f"Group: {request.groupName}" if request.groupName else "Unknown"
+        logger.info(f"🛡️ Request: AssignPolicies to {target}. Resources: {request.resourceTypes}")
+
+        if not AWS_ONLINE:
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            return pb2.AssignPoliciesResponse(success=False, message="Offline Mode")
+
+        try:
+            self.group_manager.assign_policies_to_target(
+                resource_types=list(request.resourceTypes),
+                group_name=request.groupName
+            )
+            return pb2.AssignPoliciesResponse(success=True, message="Policies assigned successfully.")
+        except Exception as e:
+            logger.error(f"❌ Error assigning policies: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return pb2.AssignPoliciesResponse(success=False, message=str(e))
+
+    def RemoveGroup(self, request, context):
+        logger.info(f"🗑️ Request: RemoveGroup (Name: {request.groupName})")
+
+        if not AWS_ONLINE:
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            return pb2.RemoveGroupResponse(success=False, message="Offline Mode")
+
+        try:
+            removed_users, msg = self.group_manager.delete_group_and_users(request.groupName)
+            return pb2.RemoveGroupResponse(
+                success=True,
+                removedUsers=removed_users,
+                message=msg
+            )
+        except Exception as e:
+            logger.error(f"❌ Error removing group: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return pb2.RemoveGroupResponse(success=False, message=str(e))
+
+    # ==========================================
+    # RESOURCE CLEANUP
+    # ==========================================
+
+    def CleanupGroupResources(self, request, context):
+        # Normalize strictly for logging and consistency
+        raw_name = request.groupName
+        norm_name = normalize_name(raw_name)
+
+        logger.info(f"🧹 Request: CleanupGroupResources for '{raw_name}' (Tag: '{norm_name}')")
+
+        if not AWS_ONLINE:
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            return pb2.CleanupGroupResponse(success=False, message="Offline Mode")
+
+        try:
+            resources = find_resources_by_group("Group", norm_name)
+            if not resources:
+                logger.info("   No resources found.")
+                return pb2.CleanupGroupResponse(
+                    success=True, message=f"No resources found for tag Group={norm_name}"
+                )
+
+            deleted_msgs = []
+            for r in resources:
+                msg = delete_resource(r)
+                deleted_msgs.append(msg)
+
+            return pb2.CleanupGroupResponse(
+                success=True,
+                deletedResources=deleted_msgs,
+                message="Cleanup completed."
+            )
+
+        except Exception as e:
+            logger.error(f"❌ Error during cleanup: {e}", exc_info=True)
+            return pb2.CleanupGroupResponse(success=False, message=str(e))
 
     def GetResourceCount(self, request, context):
-        group_name = request.groupName
-        resource_type = (request.resourceType or "").strip().lower()
-        logging.info(f"📦 Zliczanie zasobów dla grupy='{group_name}', typ='{resource_type}'")
-        if not resource_type:
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details("Pole resourceType nie może być puste.")
-            return pb2.ResourceCountResponse()
+        norm_name = normalize_name(request.groupName)
+        res_type = (request.resourceType or "").strip().lower()
+        logger.info(f"📦 Request: GetResourceCount for '{norm_name}', type='{res_type}'")
+
+        if not AWS_ONLINE:
+            return pb2.ResourceCountResponse(count=0)
 
         try:
-            resources = find_resources_by_group("Group", group_name)
-            count = sum(1 for r in resources if (r.get("service") or "").lower() == resource_type)
+            resources = find_resources_by_group("Group", norm_name)
+            count = sum(1 for r in resources if r.get("service") == res_type)
             return pb2.ResourceCountResponse(count=count)
         except Exception as e:
-            logging.error(f"❌ Błąd w GetResourceCount: {e}", exc_info=True)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Błąd podczas zliczania zasobów: {e}")
-            return pb2.ResourceCountResponse()
+            logger.error(f"❌ Error counting resources: {e}")
+            return pb2.ResourceCountResponse(count=0)
+
+    # ==========================================
+    # COST MONITORING
+    # ==========================================
 
     def GetTotalCostForGroup(self, request, context):
-        logging.info(f"💰 Pobieranie kosztów dla grupy: {request.groupName}, od: {request.startDate}")
+        group_tag = normalize_name(request.groupName)
+        logger.info(f"💰 Request: Cost for Group '{group_tag}'")
+
+        if not AWS_ONLINE: return pb2.CostResponse(amount=0.0)
+
         try:
-            cost = limits_manager.get_total_cost_for_group(
-                group_tag_value=request.groupName,
+            cost = self.cost_manager.get_total_cost_for_group(
+                group_tag_value=group_tag,
                 start_date=request.startDate,
                 end_date=request.endDate or None
             )
-            response = pb2.CostResponse()
-            response.amount = cost
-            return response
+            return pb2.CostResponse(amount=cost)
         except Exception as e:
-            logging.error(f"❌ Błąd w GetTotalCostForGroup: {e}", exc_info=True)
+            logger.error(f"❌ Cost Error: {e}")
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Błąd podczas pobierania kosztów grupy: {e}")
             return pb2.CostResponse()
 
     def GetGroupCostWithServiceBreakdown(self, request, context):
-        logging.info(f"🔍 Pobieranie szczegółowych kosztów dla grupy: {request.groupName}, od: {request.startDate}")
+        group_tag = normalize_name(request.groupName)
+        logger.info(f"💰 Request: Cost Breakdown for Group '{group_tag}'")
+
+        if not AWS_ONLINE: return pb2.GroupServiceBreakdownResponse()
+
         try:
-            breakdown = limits_manager.get_group_cost_with_service_breakdown(
-                group_tag_value=request.groupName,
+            data = self.cost_manager.get_group_cost_with_service_breakdown(
+                group_tag_value=group_tag,
                 start_date=request.startDate,
                 end_date=request.endDate or None
             )
-            response = pb2.GroupServiceBreakdownResponse()
-            response.total = breakdown['total']
-            for service_name, amount in breakdown['by_service'].items():
-                service_cost = response.breakdown.add()
-                service_cost.serviceName = service_name
-                service_cost.amount = amount
-            return response
+
+            resp = pb2.GroupServiceBreakdownResponse(total=data['total'])
+            for svc, amt in data['by_service'].items():
+                resp.breakdown.add(serviceName=svc, amount=amt)
+            return resp
         except Exception as e:
-            logging.error(f"❌ Błąd w GetGroupCostWithServiceBreakdown: {e}", exc_info=True)
+            logger.error(f"❌ Cost Breakdown Error: {e}")
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Błąd podczas pobierania kosztów usług grupy: {e}")
             return pb2.GroupServiceBreakdownResponse()
 
     def GetTotalCostsForAllGroups(self, request, context):
-        logging.info(f"📊 Pobieranie kosztów dla wszystkich grup od: {request.startDate}")
+        logger.info("📊 Request: Total Costs For All Groups")
+
+        if not AWS_ONLINE: return pb2.AllGroupsCostResponse()
+
         try:
-            costs_dict = limits_manager.get_total_costs_for_all_groups(
+            data = self.cost_manager.get_total_costs_for_all_groups(
                 start_date=request.startDate,
                 end_date=request.endDate or None
             )
-            response = pb2.AllGroupsCostResponse()
-            for group, cost in costs_dict.items():
-                group_cost = response.groupCosts.add()
-                group_cost.groupName = group
-                group_cost.amount = cost
-            return response
+            resp = pb2.AllGroupsCostResponse()
+            for grp, cost in data.items():
+                resp.groupCosts.add(groupName=grp, amount=cost)
+            return resp
         except Exception as e:
-            logging.error(f"❌ Błąd w GetTotalCostsForAllGroups: {e}", exc_info=True)
+            logger.error(f"❌ All Groups Cost Error: {e}")
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Błąd podczas pobierania kosztów grup: {e}")
             return pb2.AllGroupsCostResponse()
 
     def GetTotalCost(self, request, context):
-        logging.info(f"🌐 Pobieranie całkowitych kosztów AWS od: {request.startDate}")
+        logger.info("🌐 Request: Global AWS Cost")
+
+        if not AWS_ONLINE: return pb2.CostResponse(amount=0.0)
+
         try:
-            cost = limits_manager.get_total_aws_cost(
+            cost = self.cost_manager.get_total_aws_cost(
                 start_date=request.startDate,
                 end_date=request.endDate or None
             )
-            response = pb2.CostResponse()
-            response.amount = cost
-            return response
+            return pb2.CostResponse(amount=cost)
         except Exception as e:
-            logging.error(f"❌ Błąd w GetTotalAwsCost: {e}", exc_info=True)
+            logger.error(f"❌ Global Cost Error: {e}")
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Błąd podczas pobierania całkowitych kosztów AWS: {e}")
             return pb2.CostResponse()
 
     def GetTotalCostWithServiceBreakdown(self, request, context):
-        logging.info(f"🧾 Pobieranie całkowitych kosztów AWS z podziałem na usługi od: {request.startDate}")
+        logger.info("🧾 Request: Global AWS Cost Breakdown")
+
+        if not AWS_ONLINE: return pb2.GroupServiceBreakdownResponse()
+
         try:
-            result = limits_manager.get_total_cost_with_service_breakdown(
+            data = self.cost_manager.get_total_cost_with_service_breakdown(
                 start_date=request.startDate,
                 end_date=request.endDate or None
             )
-            response = pb2.GroupServiceBreakdownResponse()
-            response.total = result['total']
-            for service_name, amount in result['by_service'].items():
-                entry = response.breakdown.add()
-                entry.serviceName = service_name
-                entry.amount = amount
-            return response
+            resp = pb2.GroupServiceBreakdownResponse(total=data['total'])
+            for svc, amt in data['by_service'].items():
+                resp.breakdown.add(serviceName=svc, amount=amt)
+            return resp
         except Exception as e:
-            logging.error(f"❌ Błąd w GetTotalCostWithServiceBreakdown: {e}", exc_info=True)
+            logger.error(f"❌ Global Breakdown Error: {e}")
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Błąd podczas pobierania kosztów AWS: {e}")
             return pb2.GroupServiceBreakdownResponse()
 
     def GetGroupCostsLast6MonthsByService(self, request, context):
-        group_name = (request.groupName or '').strip()
-        logging.info(f"🗓️ Pobieranie kosztów (ostatnie 6 mies.) dla grupy: {group_name}")
-        if not group_name:
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details("Pole groupName nie może być puste.")
-            return pb2.GroupCostMapResponse()
+        group_tag = normalize_name(request.groupName)
+        logger.info(f"🗓️ Request: 6-Month History for '{group_tag}'")
+
+        if not AWS_ONLINE: return pb2.GroupCostMapResponse()
+
         try:
-            costs = limits_manager.get_group_cost_last_6_months_by_service(group_tag_value=group_name)
+            data = self.cost_manager.get_group_cost_last_6_months_by_service(group_tag)
             resp = pb2.GroupCostMapResponse()
-            for k, v in costs.items():
+            for k, v in data.items():
                 resp.costs[k] = v
             return resp
         except Exception as e:
-            logging.error(f"❌ Błąd w GetGroupCostsLast6MonthsByService: {e}", exc_info=True)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Błąd podczas pobierania kosztów 6-miesięcznych: {e}")
+            logger.error(f"❌ 6-Month Service Error: {e}")
             return pb2.GroupCostMapResponse()
 
     def GetGroupMonthlyCostsLast6Months(self, request, context):
-        group_name = (request.groupName or '').strip()
-        logging.info(f"📅 Pobieranie miesięcznych kosztów (ostatnie 6 mies.) dla grupy: {group_name}")
-        if not group_name:
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details("Pole groupName nie może być puste.")
-            return pb2.GroupMonthlyCostsResponse()
+        group_tag = normalize_name(request.groupName)
+        logger.info(f"📅 Request: 6-Month Trend for '{group_tag}'")
+
+        if not AWS_ONLINE: return pb2.GroupMonthlyCostsResponse()
+
         try:
-            costs = limits_manager.get_group_monthly_costs_last_6_months(group_tag_value=group_name)
+            data = self.cost_manager.get_group_monthly_costs_last_6_months(group_tag)
             resp = pb2.GroupMonthlyCostsResponse()
-            for month, amount in costs.items():
-                resp.monthCosts[month] = amount
+            for k, v in data.items():
+                resp.monthCosts[k] = v
             return resp
         except Exception as e:
-            logging.error(f"❌ Błąd w GetGroupMonthlyCostsLast6Months: {e}", exc_info=True)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Błąd podczas pobierania miesięcznych kosztów: {e}")
+            logger.error(f"❌ 6-Month Trend Error: {e}")
             return pb2.GroupMonthlyCostsResponse()
 
-    def RemoveGroup(self, request, context):
-        logging.info(f"🗑️ Removing IAM group and its users: {request.groupName}")
-        try:
-            removed_users, message = group_manager.delete_group_and_users(request.groupName)
-            return pb2.RemoveGroupResponse(success=True, removedUsers=removed_users, message=message)
-        except ClientError as e:
-            logging.error(f"❌ AWS error in RemoveGroup: {e}", exc_info=True)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"AWS error: {e}")
-            return pb2.RemoveGroupResponse(success=False, message=str(e))
-        except Exception as e:
-            logging.error(f"❌ Unexpected error in RemoveGroup: {e}", exc_info=True)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Unexpected error: {e}")
-            return pb2.RemoveGroupResponse(success=False, message=str(e))
-
-    def CleanupGroupResources(self, request, context):
-        raw_group_name = request.groupName
-        group_name = re.sub(r'[^a-zA-Z0-9+=,.@_-]', '', raw_group_name)
-
-        logging.info(f"Starting cleanup for group: '{raw_group_name}' (Normalized tag: '{group_name}')")
-
-        try:
-            resources = find_resources_by_group("Group", group_name)
-        except Exception as e:
-            logging.error(f"❌ Error searching resources: {e}")
-            return pb2.CleanupGroupResponse(success=False, message=f"Search failed: {str(e)}")
-
-        if not resources:
-            logging.info(f"No resources found with tag Group={group_name}")
-            return pb2.CleanupGroupResponse(
-                success=True,
-                message=f"No resources found for group '{group_name}'"
-            )
-
-        # 3. Usuń zasoby
-        deleted = []
-        failed = []
-
-        logging.info(f"Found {len(resources)} resources to delete.")
-
-        for r in resources:
-            try:
-                msg = delete_resource(r)
-                deleted.append(msg)
-                logging.info(f"   Deleted: {msg}")
-            except Exception as e:
-                error_msg = f"Failed to delete resource {r.get('ResourceARN', 'unknown')}: {e}"
-                logging.error(error_msg)
-                failed.append(error_msg)
-
-        final_message = f"Cleanup completed. Deleted: {len(deleted)}, Failed: {len(failed)}."
-        if failed:
-            final_message += " Check logs for details."
-
-        return pb2.CleanupGroupResponse(
-            success=True,
-            deletedResources=deleted,
-            message=final_message
-        )
-
-    def AssignPolicies(self, request, context):
-        """
-        Przypisuje polityki inline do grupy lub użytkownika na podstawie listy usług.
-        """
-        # Logowanie parametrów
-        target_info = f"Grupa: {request.groupName}" if request.groupName else f"User: {request.userName}"
-        logging.info(f"🛡️ Przypisywanie polityk dla zasobów: {request.resourceTypes}. Cel: {target_info}")
-
-        try:
-            if not request.resourceTypes:
-                msg = "Lista typów zasobów (resourceTypes) jest pusta."
-                logging.warning(f"⚠️ {msg}")
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details(msg)
-                return pb2.AssignPoliciesResponse(success=False, message=msg)
-
-            if not request.groupName and not request.userName:
-                msg = "Musisz podać groupName LUB userName."
-                logging.warning(f"⚠️ {msg}")
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details(msg)
-                return pb2.AssignPoliciesResponse(success=False, message=msg)
-
-            # Konwersja pustych stringów gRPC na None
-            g_name = request.groupName if request.groupName else None
-            u_name = request.userName if request.userName else None
-
-            # Metoda Assign w GroupManager obsłuży teraz minifikację
-            group_manager.assign_policies_to_target(
-                resource_types=list(request.resourceTypes),
-                group_name=g_name,
-                user_name=u_name
-            )
-
-            success_msg = f"Polityki pomyślnie przypisane do {target_info}."
-            logging.info(f"✅ {success_msg}")
-
-            return pb2.AssignPoliciesResponse(
-                success=True,
-                message=success_msg
-            )
-
-        except FileNotFoundError as e:
-            logging.error(f"❌ Nie znaleziono pliku polityki: {e}")
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(e))
-            return pb2.AssignPoliciesResponse(success=False, message=str(e))
-
-        except ClientError as e:
-            logging.error(f"❌ Błąd AWS przy przypisywaniu polityk: {e}", exc_info=True)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Błąd AWS: {e}")
-            return pb2.AssignPoliciesResponse(success=False, message=str(e))
-
-        except Exception as e:
-            logging.error(f"❌ Nieoczekiwany błąd w AssignPolicies: {e}", exc_info=True)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Nieoczekiwany błąd: {e}")
-            return pb2.AssignPoliciesResponse(success=False, message=str(e))
 
 def serve():
+    """
+    Starts the gRPC server.
+    """
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     pb2_grpc.add_CloudAdapterServicer_to_server(CloudAdapterServicer(), server)
     server.add_insecure_port('[::]:50051')
     server.start()
-    logging.info("🚀 Serwer działa na porcie 50051...")
+    logger.info("🚀 Server started on port 50051. Waiting for requests...")
     server.wait_for_termination()
 
+
 if __name__ == '__main__':
+    # 1. Bootstrap System (Health Check & Auto-Fix)
+    initialize_application()
+
+    # 2. Start gRPC Server
     serve()

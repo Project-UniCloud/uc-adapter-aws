@@ -1,16 +1,10 @@
 import boto3
-import re
-import time
+import logging
 from botocore.exceptions import ClientError
+from common.naming import normalize_name
 
-
-def _normalize_name(name: str) -> str:
-    """
-    Ujednolicona normalizacja zgodna z GroupManager.
-    Pozwala na znaki: a-z, A-Z, 0-9, +, =, ,, ., @, _, -
-    NIE zamienia '_' na '-'!
-    """
-    return re.sub(r'[^a-zA-Z0-9+=,.@_-]', '', name)
+# Initialize logger for this module
+logger = logging.getLogger(__name__)
 
 
 class UserManager:
@@ -18,74 +12,82 @@ class UserManager:
         self.iam_client = boto3.client('iam')
 
     def create_users_for_group(self, users: list[str], group_name: str) -> str:
+        """
+        Creates IAM users, sets passwords, and adds them to the specified group.
+        Handles normalization of names automatically.
+        """
         created_users = []
 
-        # Używamy nowej normalizacji (nie zamieni _ na -)
-        group_name = _normalize_name(group_name)
+        # Use centralized normalization
+        group_name = normalize_name(group_name)
+
+        logger.info(f"Creating {len(users)} users for group: {group_name}")
 
         for user in users:
-            # Tworzymy unikalną nazwę usera: User-Grupa
+            # Create unique username: User-Group
             raw_username = f"{user}-{group_name}"
-            username = _normalize_name(raw_username)
+            username = normalize_name(raw_username)
 
             try:
-                # 1. Tworzenie użytkownika
+                # 1. Create User
                 self.iam_client.create_user(
                     UserName=username,
                     Tags=[{'Key': 'Group', 'Value': group_name}]
                 )
                 created_users.append(username)
-                print(f"   👤 Utworzono użytkownika '{username}'")
+                logger.info(f"   👤 Created user '{username}'")
 
-                # 2. Tworzenie profilu logowania (hasło)
+                # 2. Create Login Profile (Password = group_name)
                 self.iam_client.create_login_profile(
                     UserName=username,
                     Password=group_name,
                     PasswordResetRequired=True
                 )
-                print(f"      🔑 Ustawiono hasło dla '{username}'")
+                logger.info(f"      🔑 Password set for '{username}'")
 
-                # 3. Dodawanie do grupy
+                # 3. Add to Group
                 self.iam_client.add_user_to_group(
                     GroupName=group_name,
                     UserName=username
                 )
-                print(f"      tg Dodano '{username}' do grupy '{group_name}'")
+                logger.info(f"      tg Added '{username}' to group '{group_name}'")
 
             except ClientError as e:
                 error_code = e.response['Error']['Code']
 
                 if error_code == 'EntityAlreadyExists':
-                    print(f"⚠️ Użytkownik '{username}' już istnieje, pomijam.")
+                    logger.warning(f"⚠️ User '{username}' already exists. Skipping.")
                     continue
 
-                # Specjalna obsługa braku grupy - uruchamia Rollback
+                # Critical Error: The group does not exist
                 elif error_code == 'NoSuchEntity' and 'group' in e.response['Error']['Message'].lower():
-                    print(f"❌ KRYTYCZNY BŁĄD: Grupa '{group_name}' nie istnieje w AWS!")
+                    logger.error(f"❌ CRITICAL: Group '{group_name}' does not exist in AWS!")
                     self._rollback_users(created_users)
-                    return f"Operacja przerwana: Grupa '{group_name}' nie istnieje."
+                    return f"Operation aborted: Group '{group_name}' does not exist."
 
-                # Inne błędy
-                print(f"❌ Błąd przy użytkowniku '{username}': {e}")
+                # Other errors triggers rollback
+                logger.error(f"❌ Error creating user '{username}': {e}")
                 self._rollback_users(created_users)
-                return f"Operacja przerwana: Błąd przy '{username}' - {e}"
+                return f"Operation aborted: Error with '{username}' - {e}"
 
-        return f"Pomyślnie przetworzono {len(users)} użytkowników dla grupy '{group_name}'."
+        return f"Successfully processed {len(users)} users for group '{group_name}'."
 
     def _rollback_users(self, created_users):
-        """Pomocnicza metoda do cofania zmian (sprzątania) w razie błędu."""
-        print("🔄 Rozpoczynam wycofywanie zmian (Rollback)...")
+        """
+        Rollback mechanism: Cleans up users created during a failed operation.
+        """
+        logger.info("🔄 Starting Rollback process...")
         for user in created_users:
             try:
-                # Najpierw musimy usunąć profil logowania
+                # 1. Delete Login Profile first (required before deleting user)
                 try:
                     self.iam_client.delete_login_profile(UserName=user)
                 except ClientError as e:
                     if e.response['Error']['Code'] != 'NoSuchEntity':
-                        print(f"   Błąd usuwania profilu dla {user}: {e}")
+                        logger.warning(f"   Error deleting login profile for {user}: {e}")
 
-                # Na koniec usuwamy usera
+                # 2. Delete User
                 self.iam_client.delete_user(UserName=user)
-                print(f"   🗑️ Usunięto użytkownika '{user}'")
+                logger.info(f"   🗑️ Rollback: Deleted user '{user}'")
             except ClientError as rollback_error:
-                print(f"   ❌ Nie udało się cofnąć zmian dla '{user}': {rollback_error}")
+                logger.error(f"   ❌ Rollback failed for '{user}': {rollback_error}")

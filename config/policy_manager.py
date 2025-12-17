@@ -4,24 +4,26 @@ import logging
 from pathlib import Path
 from typing import List, Set
 
+logger = logging.getLogger(__name__)
+
 class PolicyManager:
-    def __init__(self, policies_dir: str = "config/policies"):
-        # Ustawiamy ścieżkę relatywnie do miejsca uruchomienia aplikacji (root projektu)
-        self.policies_path = Path(os.getcwd()) / policies_dir
+    def __init__(self, policies_dir: str = "policies"):
+        current_file_path = Path(__file__).resolve()
+        self.policies_path = current_file_path.parent / "policies"
 
     def get_available_services(self) -> List[str]:
         """
-        Zwraca listę usług, które posiadają parę plików polityk:
-        leader_{usluga}_policy.json AND student_{usluga}_policy.json
+        Scans the policies directory and returns a list of services that have
+        both a 'leader_{service}_policy.json' and 'student_{service}_policy.json'.
         """
         if not self.policies_path.exists():
-            logging.warning(f"⚠️ Katalog polityk nie istnieje: {self.policies_path}")
+            logger.warning(f"⚠️ Policy directory not found: {self.policies_path}")
             return []
 
         leader_services: Set[str] = set()
         student_services: Set[str] = set()
 
-        # Regex: dopasowuje np. 'leader_ec2_policy.json' i wyciąga 'ec2'
+        # Regex to match filenames like 'leader_ec2_policy.json'
         leader_pattern = re.compile(r"^leader_(.*?)_policy\.json$")
         student_pattern = re.compile(r"^student_(.*?)_policy\.json$")
 
@@ -30,25 +32,25 @@ class PolicyManager:
                 if entry.is_file():
                     filename = entry.name
 
-                    # Sprawdź czy to plik lidera
+                    # Check for leader policy
                     l_match = leader_pattern.match(filename)
                     if l_match:
                         leader_services.add(l_match.group(1))
                         continue
 
-                    # Sprawdź czy to plik studenta
+                    # Check for student policy
                     s_match = student_pattern.match(filename)
                     if s_match:
                         student_services.add(s_match.group(1))
                         continue
 
-            # Część wspólna (intersekcja) obu zbiorów
+            # Intersection: Service is available only if BOTH policies exist
             available = list(leader_services.intersection(student_services))
             available.sort()
 
-            logging.info(f"✅ Znalezione dostępne usługi (policy match): {available}")
+            logger.info(f"✅ Found available services (policy match): {available}")
             return available
 
         except Exception as e:
-            logging.error(f"❌ Błąd podczas skanowania polityk: {e}")
+            logger.error(f"❌ Error scanning policies: {e}")
             return []
