@@ -196,6 +196,47 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_details(str(e))
             return pb2.AssignPoliciesResponse(success=False, message=str(e))
 
+    def AddLeaderToGroup(self, request, context):
+        """
+        Handler for adding a leader to an existing group.
+        """
+        # 1. Extract params
+        g_name = request.group_name
+        l_name = request.leader_name
+
+        logger.info(f"➕ Request: AddLeaderToGroup (Leader: '{l_name}', Group: '{g_name}')")
+
+        # 2. Check Offline Mode
+        if not AWS_ONLINE:
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            context.set_details("System is OFFLINE")
+            return pb2.AddLeaderToGroupResponse(success=False, message="System is Offline")
+
+        # 3. Validation
+        if not g_name or not l_name:
+            msg = "Both group_name and leader_name are required."
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(msg)
+            return pb2.AddLeaderToGroupResponse(success=False, message=msg)
+
+        # 4. Execution
+        try:
+            self.group_manager.add_leader_to_existing_group(
+                group_name=g_name,
+                leader_name=l_name
+            )
+
+            return pb2.AddLeaderToGroupResponse(
+                success=True,
+                message=f"Leader '{l_name}' successfully added to group '{g_name}'."
+            )
+
+        except Exception as e:
+            logger.error(f"❌ Error adding leader to group: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return pb2.AddLeaderToGroupResponse(success=False, message=str(e))
+
     def RemoveGroup(self, request, context):
         logger.info(f"🗑️ Request: RemoveGroup (Name: {request.groupName})")
 
@@ -215,6 +256,44 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             return pb2.RemoveGroupResponse(success=False, message=str(e))
+
+    def DeleteUser(self, request, context):
+        # 1. Extract raw data from the request
+        raw_user = request.user_name
+        raw_group = request.group_name
+
+        # 2. Normalize the group name (same logic as used during creation)
+        # E.g., "Lab Python" -> "labpython"
+        normalized_group = normalize_name(raw_group)
+
+        # 3. Construct the full AWS username: User-Group
+        # This is the critical step to match the naming convention used during user creation.
+        raw_full_username = f"{raw_user}-{normalized_group}"
+
+        # 4. Final normalization of the full name
+        # E.g., "Jan.Kowalski-labpython" -> "jan_kowalski-labpython"
+        aws_username = normalize_name(raw_full_username)
+
+        logger.info(f"👤 Request: Delete IAM User '{aws_username}' (Base: '{raw_user}', Group: '{normalized_group}')")
+
+        if not AWS_ONLINE:
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            return pb2.DeleteUserResponse(success=False, message="Offline Mode")
+
+        try:
+            # 5. Call the user manager with the fully constructed AWS username
+            success = self.user_manager.delete_user(aws_username)
+
+            if success:
+                msg = f"User {aws_username} deleted successfully."
+                return pb2.DeleteUserResponse(success=True, message=msg)
+            else:
+                return pb2.DeleteUserResponse(success=False, message=f"User {aws_username} not found.")
+
+        except Exception as e:
+            logger.error(f"❌ Error deleting user {aws_username}: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            return pb2.DeleteUserResponse(success=False, message=str(e))
 
     # ==========================================
     # RESOURCE CLEANUP
