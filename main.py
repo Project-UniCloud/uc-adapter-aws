@@ -349,6 +349,53 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             logger.error(f"❌ Error counting resources: {e}")
             return pb2.ResourceCountResponse(count=0)
 
+    def DeleteResource(self, request, context):
+        target_arn = request.resource_arn.strip()
+        logger.info(f"🗑️ Request: Delete Single Resource ARN: '{target_arn}'")
+
+        if not AWS_ONLINE:
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            return pb2.DeleteResourceResponse(success=False, message="Offline Mode")
+
+        if not target_arn:
+            return pb2.DeleteResourceResponse(success=False, message="ARN cannot be empty")
+
+        try:
+            # 1. Extract the service name from the ARN (it is always the 3rd element)
+            # Standard ARN Format: arn:aws:service:region:account:resource
+            parts = target_arn.split(':')
+
+            if len(parts) < 3:
+                return pb2.DeleteResourceResponse(
+                    success=False,
+                    message=f"Invalid ARN format: {target_arn}"
+                )
+
+            service_name = parts[2]  # e.g., 'ec2', 's3', 'lambda'
+
+            # 2. Construct the resource dictionary required by the global delete_resource function
+            resource_obj = {
+                "arn": target_arn,
+                "service": service_name
+            }
+
+            # 3. Call the existing cleanup function
+            # This function returns a string message indicating the result.
+            result_msg = delete_resource(resource_obj)
+
+            # 4. Determine success status based on the returned message
+            is_success = "❌" not in result_msg
+
+            return pb2.DeleteResourceResponse(
+                success=is_success,
+                message=result_msg
+            )
+
+        except Exception as e:
+            logger.error(f"❌ Error in DeleteResource handler: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            return pb2.DeleteResourceResponse(success=False, message=str(e))
+
     # ==========================================
     # COST MONITORING
     # ==========================================
