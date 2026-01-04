@@ -216,6 +216,44 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_details(str(e))
             return pb2.RemoveGroupResponse(success=False, message=str(e))
 
+    def DeleteUser(self, request, context):
+        # 1. Extract raw data from the request
+        raw_user = request.user_name
+        raw_group = request.group_name
+
+        # 2. Normalize the group name (same logic as used during creation)
+        # E.g., "Lab Python" -> "labpython"
+        normalized_group = normalize_name(raw_group)
+
+        # 3. Construct the full AWS username: User-Group
+        # This is the critical step to match the naming convention used during user creation.
+        raw_full_username = f"{raw_user}-{normalized_group}"
+
+        # 4. Final normalization of the full name
+        # E.g., "Jan.Kowalski-labpython" -> "jan_kowalski-labpython"
+        aws_username = normalize_name(raw_full_username)
+
+        logger.info(f"👤 Request: Delete IAM User '{aws_username}' (Base: '{raw_user}', Group: '{normalized_group}')")
+
+        if not AWS_ONLINE:
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            return pb2.DeleteUserResponse(success=False, message="Offline Mode")
+
+        try:
+            # 5. Call the user manager with the fully constructed AWS username
+            success = self.user_manager.delete_user(aws_username)
+
+            if success:
+                msg = f"User {aws_username} deleted successfully."
+                return pb2.DeleteUserResponse(success=True, message=msg)
+            else:
+                return pb2.DeleteUserResponse(success=False, message=f"User {aws_username} not found.")
+
+        except Exception as e:
+            logger.error(f"❌ Error deleting user {aws_username}: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            return pb2.DeleteUserResponse(success=False, message=str(e))
+
     # ==========================================
     # RESOURCE CLEANUP
     # ==========================================
