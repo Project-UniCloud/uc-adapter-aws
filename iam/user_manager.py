@@ -162,3 +162,55 @@ class UserManager:
                 return False
             logger.error(f"❌ Failed to delete user {username}: {e}")
             raise e
+
+    def add_leader_to_existing_group(self, group_name: str, leader_name: str):
+        """
+        Adds a new leader to an ALREADY EXISTING group environment.
+        """
+        # 1. Reconstruct group names based on conventions
+        group_name = normalize_name(group_name)
+        leaders_group_name = f"Leaders-{group_name}"
+
+        logger.info(f"➕ Adding new leader '{leader_name}' to existing group '{group_name}'")
+
+        # 2. Prepare leader username
+        raw_leader = f"{leader_name}-{group_name}"
+        leader_user = normalize_name(raw_leader)
+
+        # 3. Create User & Login Profile (Logic copied from creation flow)
+        try:
+            self.iam_client.create_user(
+                UserName=leader_user,
+                Tags=[{'Key': 'Group', 'Value': group_name}]
+            )
+            # Set initial password same as group name (or any other logic you prefer)
+            self.iam_client.create_login_profile(
+                UserName=leader_user, Password=group_name, PasswordResetRequired=True
+            )
+            logger.info(f"   👤 Created new leader user '{leader_user}'")
+
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'EntityAlreadyExists':
+                logger.info(f"   ℹ️ Leader '{leader_user}' already exists. Updating tags/groups.")
+                try:
+                    self.iam_client.tag_user(
+                        UserName=leader_user,
+                        Tags=[{'Key': 'Group', 'Value': group_name}]
+                    )
+                except ClientError:
+                    pass
+            else:
+                logger.error(f"   ❌ Error creating leader {leader_user}: {e}")
+                return  # Stop if critical error occurs
+
+        # 4. Add to IAM Groups
+        # Warning: This assumes the groups already exist.
+        # If there is a risk they don't, wrap in try-except or check existence first.
+
+        # Add to Leaders Group (Permissions)
+        self._add_user_to_group_safe(leaders_group_name, leader_user)
+
+        # Add to Student Group (Visibility)
+        self._add_user_to_group_safe(group_name, leader_user)
+
+        logger.info(f"   ✅ Successfully added {leader_user} to groups.")

@@ -196,6 +196,47 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             context.set_details(str(e))
             return pb2.AssignPoliciesResponse(success=False, message=str(e))
 
+    def AddLeaderToGroup(self, request, context):
+        """
+        Handler for adding a leader to an existing group.
+        """
+        # 1. Extract params
+        g_name = request.group_name
+        l_name = request.leader_name
+
+        logger.info(f"➕ Request: AddLeaderToGroup (Leader: '{l_name}', Group: '{g_name}')")
+
+        # 2. Check Offline Mode
+        if not AWS_ONLINE:
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            context.set_details("System is OFFLINE")
+            return pb2.AddLeaderToGroupResponse(success=False, message="System is Offline")
+
+        # 3. Validation
+        if not g_name or not l_name:
+            msg = "Both group_name and leader_name are required."
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(msg)
+            return pb2.AddLeaderToGroupResponse(success=False, message=msg)
+
+        # 4. Execution
+        try:
+            self.group_manager.add_leader_to_existing_group(
+                group_name=g_name,
+                leader_name=l_name
+            )
+
+            return pb2.AddLeaderToGroupResponse(
+                success=True,
+                message=f"Leader '{l_name}' successfully added to group '{g_name}'."
+            )
+
+        except Exception as e:
+            logger.error(f"❌ Error adding leader to group: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return pb2.AddLeaderToGroupResponse(success=False, message=str(e))
+
     def RemoveGroup(self, request, context):
         logger.info(f"🗑️ Request: RemoveGroup (Name: {request.groupName})")
 
