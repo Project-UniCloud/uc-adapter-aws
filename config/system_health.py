@@ -2,6 +2,7 @@ import boto3
 import logging
 import sys
 import os
+import re
 from botocore.exceptions import ClientError, NoCredentialsError, PartialCredentialsError
 
 # Setup paths for auto-tagging deployer
@@ -16,6 +17,7 @@ if deployer_path not in sys.path:
 
 try:
     from deploy_auto_tagging import AutoTaggingDeployer
+
     DEPLOYER_AVAILABLE = True
 except ImportError:
     DEPLOYER_AVAILABLE = False
@@ -38,7 +40,7 @@ class SystemHealthCheck:
             self.iam = self.session.client('iam')
             self.lambda_client = self.session.client('lambda')
             self.events_client = self.session.client('events')
-            self.ce_client = self.session.client('ce') # Cost Explorer Client
+            self.ce_client = self.session.client('ce')  # Cost Explorer Client
             self.aws_available = True
         except Exception as e:
             logger.error(f"⚠️ Failed to initialize AWS clients: {e}")
@@ -52,6 +54,19 @@ class SystemHealthCheck:
         self.required_policy_files = [
             "change_password_policy.json",
             "regional_restriction_policy.json"
+        ]
+
+        # List of critical permissions required for the system to function
+        self.required_permissions = [
+            "iam:CreateUser",
+            "iam:DeleteUser",
+            "iam:CreateGroup",
+            "iam:PutUserPolicy",
+            "iam:AttachUserPolicy",
+            "iam:CreateLoginProfile",
+            "ce:UpdateCostAllocationTagsStatus",
+            "lambda:CreateFunction",
+            "events:PutRule"
         ]
 
     def ensure_system_integrity(self) -> bool:
@@ -72,23 +87,28 @@ class SystemHealthCheck:
             logger.warning("🟠 AWS UNREACHABLE. Switching to OFFLINE mode.")
             return False
 
+        # 3. Check Admin Permissions (Critical) - TO JEST NOWY KROK
+        if not self._check_admin_permissions():
+            logger.error("❌ CRITICAL ERROR: Insufficient AWS Permissions.")
+            logger.error("   The current IAM User/Role does not have Administrator capabilities.")
+            return False
+
         # --- ONLINE CHECKS & REMEDIATION ---
 
-        # 3. Configure Account Password Policy (Critical for students)
+        # 4. Configure Account Password Policy (Critical for students)
         self._ensure_account_password_policy()
 
-        # 4. Check IAM Quotas (Informational)
+        # 5. Check IAM Quotas (Informational)
         self._check_iam_quotas()
 
-        # 5. Cost Allocation Tags (CRITICAL CHECK)
-        # Logic changed: If CE is disabled, the system cannot start correctly in ONLINE mode.
+        # 6. Cost Allocation Tags (CRITICAL CHECK)
         if not self._ensure_cost_tags():
             logger.error("❌ CRITICAL ERROR: AWS Cost Explorer is NOT active/reachable.")
             logger.error("   Without Cost Explorer, the application cannot track budget limits.")
             logger.error("   ACTION REQUIRED: Log in to AWS Console -> Cost Management -> Launch Cost Explorer.")
-            return False  # Abort ONLINE startup
+            return False
 
-        # 6. Auto-Tagging Infrastructure (Remediation)
+        # 7. Auto-Tagging Infrastructure (Remediation)
         infra_ok = self._check_infrastructure_paranoid()
 
         if not infra_ok:
@@ -101,8 +121,6 @@ class SystemHealthCheck:
                     return True
                 else:
                     logger.error("❌ Remediation failed. Resources will not be tagged automatically.")
-                    # Decision: We allow the system to run (True) because Cost Explorer is active,
-                    # even if auto-tagging is broken (users can tag manually).
                     return True
             else:
                 logger.error("❌ 'AutoTaggingDeployer' module not found. Cannot repair.")
@@ -134,6 +152,59 @@ class SystemHealthCheck:
             self.sts.get_caller_identity()
             return True
         except (NoCredentialsError, PartialCredentialsError, ClientError):
+            return False
+
+    def _check_admin_permissions(self) -> bool:
+        """
+        Simulates policies to verify if the current user has Administrator-level permissions.
+        """
+        logger.info("   🛡️ Verifying IAM Admin permissions...")
+        try:
+            # 1. Get current identity ARN
+            identity = self.sts.get_caller_identity()
+            current_arn = identity['Arn']
+
+            # 2. Handle 'root' user (always has permissions)
+            if ":root" in current_arn:
+                logger.info("   ✅ Running as Root Account (Full Permissions).")
+                return True
+
+            # 3. Fix ARN for Assumed Roles (STS vs IAM)
+            policy_source_arn = current_arn
+            if ":assumed-role/" in current_arn:
+                # Regex to extract Account ID and Role Name
+                match = re.search(r'arn:aws:sts::(\d+):assumed-role/([^/]+)/', current_arn)
+                if match:
+                    account_id = match.group(1)
+                    role_name = match.group(2)
+                    policy_source_arn = f"arn:aws:iam::{account_id}:role/{role_name}"
+
+            # 4. Run Simulation
+            results = self.iam.simulate_principal_policy(
+                PolicySourceArn=policy_source_arn,
+                ActionNames=self.required_permissions
+            )
+
+            # 5. Check results
+            all_allowed = True
+            for res in results['EvaluationResults']:
+                action = res['EvalActionName']
+                decision = res['EvalDecision']
+
+                if decision != 'allowed':
+                    logger.error(f"   ❌ MISSING PERMISSION: {action} -> {decision}")
+                    all_allowed = False
+
+            if all_allowed:
+                logger.info("   ✅ Permissions verified.")
+                return True
+            else:
+                return False
+
+        except ClientError as e:
+            logger.error(f"   ❌ Failed to verify permissions: {e}")
+            logger.error(
+                "   This usually means the current user lacks 'iam:SimulatePrincipalPolicy' or is too restricted.")
             return False
 
     def _ensure_account_password_policy(self):
@@ -187,14 +258,13 @@ class SystemHealthCheck:
                 else:
                     logger.info(f"   ✅ Cost allocation tag '{self.required_tag}' is ACTIVE.")
             else:
-                # Tag doesn't exist yet (no resources created with this tag).
                 logger.warning(f"   ⚠️ Tag '{self.required_tag}' not found in Cost Allocation Tags yet.")
-                logger.warning("      (It will appear automatically ~24h after you create the first resource with this tag).")
+                logger.warning(
+                    "      (It will appear automatically ~24h after you create the first resource with this tag).")
 
             return True
 
         except ClientError as e:
-            # Catch specific AWS errors indicating the service is disabled
             error_code = e.response['Error']['Code']
             error_msg = e.response['Error']['Message']
 
@@ -212,23 +282,17 @@ class SystemHealthCheck:
 
     def _check_infrastructure_paranoid(self):
         """
-        Deep check:
-        1. Does Lambda exist?
-        2. Is EventBridge Rule ENABLED?
-        3. Does the Rule actually target the Lambda?
+        Deep check for Lambda and EventBridge.
         """
         try:
-            # 1. Check Lambda
             lambda_res = self.lambda_client.get_function(FunctionName=self.lambda_name)
             lambda_arn = lambda_res['Configuration']['FunctionArn']
 
-            # 2. Check Rule
             rule = self.events_client.describe_rule(Name=self.event_rule_name)
             if rule['State'] != 'ENABLED':
                 logger.warning("   ⚠️ EventBridge Rule was disabled. Enabling...")
                 self.events_client.enable_rule(Name=self.event_rule_name)
 
-            # 3. Check Targets (Link between Rule and Lambda)
             targets_res = self.events_client.list_targets_by_rule(Rule=self.event_rule_name)
             targets = targets_res.get('Targets', [])
 
@@ -236,7 +300,6 @@ class SystemHealthCheck:
                 logger.error("   ❌ EventBridge Rule has no targets.")
                 return False
 
-            # Check if Lambda ARN matches target ARN (handling potential version suffixes)
             is_linked = any(lambda_arn in t['Arn'] or t['Arn'] in lambda_arn for t in targets)
 
             if not is_linked:
@@ -246,7 +309,6 @@ class SystemHealthCheck:
             return True
 
         except ClientError:
-            # Any missing resource triggers a rebuild
             return False
 
     def _run_auto_deployment(self):
