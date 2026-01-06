@@ -221,7 +221,7 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
 
         # 4. Execution
         try:
-            self.group_manager.add_leader_to_existing_group(
+            self.user_manager.add_leader_to_existing_group(
                 group_name=g_name,
                 leader_name=l_name
             )
