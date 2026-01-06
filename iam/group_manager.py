@@ -161,7 +161,7 @@ class GroupManager:
                     Tags=[{'Key': 'Group', 'Value': group_name}]
                 )
                 self.iam_client.create_login_profile(
-                    UserName=leader_user, Password=group_name, PasswordResetRequired=True
+                    UserName=leader_user, Password=f'{leader_user}_password123$', PasswordResetRequired=True
                 )
                 logger.info(f"   👤 Created leader '{leader_user}'")
             except ClientError as e:
