@@ -40,7 +40,7 @@ class UserManager:
                 # 2. Create Login Profile (Password = group_name)
                 self.iam_client.create_login_profile(
                     UserName=username,
-                    Password=group_name,
+                    Password=f'{username}_password123$',
                     PasswordResetRequired=True
                 )
                 logger.info(f"      🔑 Password set for '{username}'")
