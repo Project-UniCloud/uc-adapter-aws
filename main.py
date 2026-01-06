@@ -15,7 +15,7 @@ from common.logger import setup_logger
 from iam.group_manager import GroupManager
 from iam.user_manager import UserManager
 from cost.cost_manager import CostManager
-from resources.resource_cleaner import find_resources_by_group, delete_resource
+from resources.resource_cleaner import find_resources_by_group, delete_resource, get_group_resources_details
 from config.policy_manager import PolicyManager
 
 # Import System Health Check
@@ -298,6 +298,59 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
     # ==========================================
     # RESOURCE CLEANUP
     # ==========================================
+
+    def GetGroupResourcesList(self, request, context):
+        """
+        Returns a detailed, human-readable list of resources for a given group.
+        """
+        raw_name = request.groupName
+        logger.info(f"🔎 Request: GetGroupResourcesList for group '{raw_name}'")
+
+        # 1. Check Offline Mode
+        if not AWS_ONLINE:
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            context.set_details("System is OFFLINE")
+            return pb2.GetGroupResourcesListResponse(success=False, message="Offline Mode")
+
+        try:
+            # 2. Call the logic function imported from resource_cleaner.py
+            resources_data = get_group_resources_details(raw_name)
+
+            if not resources_data:
+                logger.info(f"   ℹ️ No resources found for group '{raw_name}'.")
+                return pb2.GetGroupResourcesListResponse(
+                    success=True,
+                    resources=[],
+                    message="No resources found."
+                )
+
+            # 3. Map Python dictionaries to gRPC Message Objects
+            # Note: We map dict key 'id' to proto field 'resource_id'
+            grpc_resources = []
+            for res in resources_data:
+                grpc_item = pb2.ResourceDetail(
+                    arn=res['arn'],
+                    name=res['name'],
+                    type=res['type'],
+                    service=res['service'],
+                    created_by=res['created_by'],
+                    resource_id=res['id']  # Mapping: dict['id'] -> proto.resource_id
+                )
+                grpc_resources.append(grpc_item)
+
+            logger.info(f"   ✅ Found {len(grpc_resources)} resources.")
+
+            return pb2.GetGroupResourcesListResponse(
+                success=True,
+                resources=grpc_resources,
+                message=f"Successfully retrieved {len(grpc_resources)} resources."
+            )
+
+        except Exception as e:
+            logger.error(f"❌ Error getting group resources list: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return pb2.GetGroupResourcesListResponse(success=False, message=str(e))
 
     def CleanupGroupResources(self, request, context):
         # Normalize strictly for logging and consistency
