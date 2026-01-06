@@ -4,15 +4,18 @@ import sys
 import os
 from botocore.exceptions import ClientError, NoCredentialsError, PartialCredentialsError
 
+# Setup paths for auto-tagging deployer
+# Assuming structure: project/config/system_health.py
 current_dir = os.path.dirname(os.path.abspath(__file__))
-deployer_path = os.path.abspath(os.path.join(current_dir, 'automation', 'auto-tagging'))
+project_root = os.path.dirname(current_dir)
+deployer_path = os.path.abspath(os.path.join(project_root, 'automation', 'auto-tagging'))
 
+# Add deployer path to system path to allow importing
 if deployer_path not in sys.path:
     sys.path.append(deployer_path)
 
 try:
     from deploy_auto_tagging import AutoTaggingDeployer
-
     DEPLOYER_AVAILABLE = True
 except ImportError:
     DEPLOYER_AVAILABLE = False
@@ -35,7 +38,7 @@ class SystemHealthCheck:
             self.iam = self.session.client('iam')
             self.lambda_client = self.session.client('lambda')
             self.events_client = self.session.client('events')
-            self.ce_client = self.session.client('ce')
+            self.ce_client = self.session.client('ce') # Cost Explorer Client
             self.aws_available = True
         except Exception as e:
             logger.error(f"⚠️ Failed to initialize AWS clients: {e}")
@@ -55,7 +58,7 @@ class SystemHealthCheck:
         """
         Main entry point for diagnostics.
         Returns True if the system is ready (or successfully repaired).
-        Returns False if the system must run in OFFLINE mode.
+        Returns False if the system must run in OFFLINE mode due to critical errors.
         """
         logger.info("🏥 STARTING SYSTEM HEALTH CHECK...")
 
@@ -64,7 +67,7 @@ class SystemHealthCheck:
             logger.error("❌ CRITICAL ERROR: Missing configuration policy files.")
             return False
 
-            # 2. Check AWS Connectivity
+        # 2. Check AWS Connectivity (Critical)
         if not self.aws_available or not self._check_aws_connectivity():
             logger.warning("🟠 AWS UNREACHABLE. Switching to OFFLINE mode.")
             return False
@@ -77,8 +80,13 @@ class SystemHealthCheck:
         # 4. Check IAM Quotas (Informational)
         self._check_iam_quotas()
 
-        # 5. Cost Allocation Tags (Remediation)
-        self._ensure_cost_tags()
+        # 5. Cost Allocation Tags (CRITICAL CHECK)
+        # Logic changed: If CE is disabled, the system cannot start correctly in ONLINE mode.
+        if not self._ensure_cost_tags():
+            logger.error("❌ CRITICAL ERROR: AWS Cost Explorer is NOT active/reachable.")
+            logger.error("   Without Cost Explorer, the application cannot track budget limits.")
+            logger.error("   ACTION REQUIRED: Log in to AWS Console -> Cost Management -> Launch Cost Explorer.")
+            return False  # Abort ONLINE startup
 
         # 6. Auto-Tagging Infrastructure (Remediation)
         infra_ok = self._check_infrastructure_paranoid()
@@ -92,8 +100,9 @@ class SystemHealthCheck:
                     logger.info("✅ Remediation successful. Infrastructure is ready.")
                     return True
                 else:
-                    logger.error("❌ Remediation failed. Costs may not be tracked correctly.")
-                    # Return True to allow app usage, despite broken tagging
+                    logger.error("❌ Remediation failed. Resources will not be tagged automatically.")
+                    # Decision: We allow the system to run (True) because Cost Explorer is active,
+                    # even if auto-tagging is broken (users can tag manually).
                     return True
             else:
                 logger.error("❌ 'AutoTaggingDeployer' module not found. Cannot repair.")
@@ -152,22 +161,54 @@ class SystemHealthCheck:
         except Exception:
             pass
 
-    def _ensure_cost_tags(self):
-        """Activates the 'Group' tag for cost allocation if inactive."""
+    def _ensure_cost_tags(self) -> bool:
+        """
+        Verifies if AWS Cost Explorer is enabled and activates the 'Group' tag.
+        Returns True if successful/active, False if critical error (CE disabled).
+        """
+        logger.info("   💰 Verifying Cost Explorer status...")
         try:
+            # Attempt to list tags. This throws an error if CE is disabled.
             response = self.ce_client.list_cost_allocation_tags(
                 TagKeys=[self.required_tag], Type='UserDefined', MaxResults=10
             )
+
+            # If successful, Cost Explorer is ACTIVE.
             tag_data = next((t for t in response.get('CostAllocationTags', [])
                              if t['TagKey'] == self.required_tag), None)
 
-            if tag_data and tag_data['Status'] != 'Active':
-                logger.info(f"   🔄 Activating cost tag '{self.required_tag}'...")
-                self.ce_client.update_cost_allocation_tags_status(
-                    CostAllocationTagsStatus=[{'TagKey': self.required_tag, 'Status': 'Active'}]
-                )
-        except Exception:
-            pass
+            if tag_data:
+                if tag_data['Status'] != 'Active':
+                    logger.info(f"   🔄 Activating cost tag '{self.required_tag}'...")
+                    self.ce_client.update_cost_allocation_tags_status(
+                        CostAllocationTagsStatus=[{'TagKey': self.required_tag, 'Status': 'Active'}]
+                    )
+                    logger.info(f"   ✅ Activated tag '{self.required_tag}'. Data will appear in ~24h.")
+                else:
+                    logger.info(f"   ✅ Cost allocation tag '{self.required_tag}' is ACTIVE.")
+            else:
+                # Tag doesn't exist yet (no resources created with this tag).
+                logger.warning(f"   ⚠️ Tag '{self.required_tag}' not found in Cost Allocation Tags yet.")
+                logger.warning("      (It will appear automatically ~24h after you create the first resource with this tag).")
+
+            return True
+
+        except ClientError as e:
+            # Catch specific AWS errors indicating the service is disabled
+            error_code = e.response['Error']['Code']
+            error_msg = e.response['Error']['Message']
+
+            logger.error(f"   ❌ AWS Cost Explorer Error: {error_code} - {error_msg}")
+
+            if 'DataUnavailable' in error_msg or 'AccessDenied' in error_code:
+                logger.error("   🛑 DIAGNOSIS: AWS Cost Explorer is likely DISABLED on this account.")
+                logger.error("   👉 Please ENABLE it manually in the AWS Console.")
+
+            return False
+
+        except Exception as e:
+            logger.error(f"   ❌ Unexpected error verifying Cost Explorer: {e}")
+            return False
 
     def _check_infrastructure_paranoid(self):
         """
@@ -195,7 +236,7 @@ class SystemHealthCheck:
                 logger.error("   ❌ EventBridge Rule has no targets.")
                 return False
 
-            # Check if Lambda ARN matches target ARN (using 'in' to handle version suffixes)
+            # Check if Lambda ARN matches target ARN (handling potential version suffixes)
             is_linked = any(lambda_arn in t['Arn'] or t['Arn'] in lambda_arn for t in targets)
 
             if not is_linked:
