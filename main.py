@@ -328,14 +328,15 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             # Note: We map dict key 'id' to proto field 'resource_id'
             grpc_resources = []
             for res in resources_data:
-                grpc_item = pb2.ResourceDetail(
-                    arn=res['arn'],
-                    name=res['name'],
-                    type=res['type'],
-                    service=res['service'],
-                    created_by=res['created_by'],
-                    resource_id=res['id']  # Mapping: dict['id'] -> proto.resource_id
-                )
+                kwargs = {
+                    'resource_global_id': res['resource_global_id'],
+                    'name': res['name'],
+                    'type': res['type'],
+                    'service': res['service'],
+                    'created_by': res['created_by'],
+                    'resource_id': res['resource_id'],
+                }
+                grpc_item = pb2.ResourceDetail(**kwargs)
                 grpc_resources.append(grpc_item)
 
             logger.info(f"   ✅ Found {len(grpc_resources)} resources.")
@@ -403,32 +404,34 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
             return pb2.ResourceCountResponse(count=0)
 
     def DeleteResource(self, request, context):
-        target_arn = request.resource_arn.strip()
-        logger.info(f"🗑️ Request: Delete Single Resource ARN: '{target_arn}'")
+        # Backward/forward compatibility: support resource_global_id, cloud_resource_id, and legacy resource_arn
+        target_id = (
+            getattr(request, 'resource_global_id', '')
+        )
+        target_id = (target_id or '').strip()
+        logger.info(f"🗑️ Request: Delete Single Resource ID: '{target_id}'")
 
         if not AWS_ONLINE:
             context.set_code(grpc.StatusCode.UNAVAILABLE)
             return pb2.DeleteResourceResponse(success=False, message="Offline Mode")
 
-        if not target_arn:
-            return pb2.DeleteResourceResponse(success=False, message="ARN cannot be empty")
+        if not target_id:
+            return pb2.DeleteResourceResponse(success=False, message="Resource global ID cannot be empty")
 
         try:
-            # 1. Extract the service name from the ARN (it is always the 3rd element)
-            # Standard ARN Format: arn:aws:service:region:account:resource
-            parts = target_arn.split(':')
+            # 1. If AWS ARN, extract the service name (3rd element)
+            # Standard AWS ARN Format: arn:aws:service:region:account:resource
+            parts = target_id.split(':')
 
             if len(parts) < 3:
-                return pb2.DeleteResourceResponse(
-                    success=False,
-                    message=f"Invalid ARN format: {target_arn}"
-                )
-
-            service_name = parts[2]  # e.g., 'ec2', 's3', 'lambda'
+                # For non-AWS providers or malformed IDs, attempt best-effort: unknown service
+                service_name = 'unknown'
+            else:
+                service_name = parts[2]  # e.g., 'ec2', 's3', 'lambda'
 
             # 2. Construct the resource dictionary required by the global delete_resource function
             resource_obj = {
-                "arn": target_arn,
+                "resource_global_id": target_id,
                 "service": service_name
             }
 

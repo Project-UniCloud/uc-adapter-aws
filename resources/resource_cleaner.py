@@ -32,7 +32,7 @@ def find_resources_by_group(tag_key: str, group_name: str):
                 try:
                     # Extract service name (e.g., 'ec2', 's3')
                     service = arn.split(":")[2]
-                    resources.append({"arn": arn, "service": service})
+                    resources.append({"resource_global_id": arn, "service": service})
                 except IndexError:
                     logger.warning(f"Could not parse service from ARN: {arn}")
 
@@ -48,8 +48,8 @@ def delete_resource(resource):
     Deletes a specific AWS resource based on ARN and service type.
     Supports: EC2 (Instances, NAT, EIP, Volumes), S3, Lambda, DynamoDB, RDS, etc.
     """
-    arn = resource["arn"]
-    service = resource["service"]
+    arn = resource.get("resource_global_id")
+    service = resource.get("service")
     msg = ""
 
     try:
@@ -221,9 +221,9 @@ def get_group_resources_details(group_name: str) -> list[dict]:
         resource_id = arn_parts[-1].split('/')[-1]
 
         resource_data = {
-            "arn": arn,
+            "resource_global_id": arn,
             "service": service,
-            "id": resource_id,
+            "resource_id": resource_id,
             "name": tags.get('Name', 'N/A'),
             "created_by": tags.get('CreatedBy', tags.get('User', 'Unknown')),
             "type": _guess_resource_type(arn)  # Called as a standalone function
