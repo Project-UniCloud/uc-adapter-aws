@@ -220,13 +220,17 @@ def get_group_resources_details(group_name: str) -> list[dict]:
         # Extract ID (after the last slash usually, or last colon)
         resource_id = arn_parts[-1].split('/')[-1]
 
+        # Determine status per service/resource
+        status = _fetch_resource_status(service, arn, resource_id)
+
         resource_data = {
             "resource_global_id": arn,
             "service": service,
             "resource_id": resource_id,
             "name": tags.get('Name', 'N/A'),
             "created_by": tags.get('CreatedBy', tags.get('User', 'Unknown')),
-            "type": _guess_resource_type(arn)  # Called as a standalone function
+            "type": _guess_resource_type(arn),  # Called as a standalone function
+            "status": status,
         }
 
         readable_resources.append(resource_data)
@@ -258,3 +262,139 @@ def _guess_resource_type(arn: str) -> str:
     if ":vpc/" in arn: return "VPC"
 
     return "Generic Resource"
+
+
+def _fetch_resource_status(service: str, arn: str, resource_id: str) -> str:
+    """Best-effort retrieval of resource status per AWS service.
+    Returns a short human-friendly status string, or 'unknown' if not available.
+    """
+    try:
+        # EC2 instance
+        if service == "ec2" and ":instance/" in arn:
+            ec2 = boto3.resource("ec2", region_name=AWS_REGION)
+            inst = ec2.Instance(resource_id)
+            # Accessing state may trigger a lazy load
+            state = getattr(inst, 'state', None) or {}
+            name = state.get('Name')
+            return name or 'unknown'
+
+        # S3 bucket
+        if service == "s3":
+            s3 = boto3.client("s3", region_name=AWS_REGION)
+            bucket_name = arn.split(":")[-1]
+            try:
+                s3.head_bucket(Bucket=bucket_name)
+                return "exists"
+            except ClientError as e:
+                code = e.response.get('Error', {}).get('Code')
+                if code in ("404", "NoSuchBucket"):
+                    return "not_found"
+                return "error"
+
+        # Lambda function
+        if service == "lambda":
+            lam = boto3.client("lambda", region_name=AWS_REGION)
+            func_name = arn.split(":")[-1]
+            try:
+                cfg = lam.get_function_configuration(FunctionName=func_name)
+                # 'State' can be 'Active'|'Pending'|'Inactive'|'Failed'
+                return cfg.get('State', 'Active')
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'ResourceNotFoundException':
+                    return "not_found"
+                return "error"
+
+        # DynamoDB table
+        if service == "dynamodb":
+            ddb = boto3.client("dynamodb", region_name=AWS_REGION)
+            table_name = arn.split("/")[-1]
+            try:
+                desc = ddb.describe_table(TableName=table_name)
+                return desc['Table'].get('TableStatus', 'unknown')
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'ResourceNotFoundException':
+                    return "not_found"
+                return "error"
+
+        # RDS instance
+        if service == "rds" and ":db:" in arn:
+            rds = boto3.client("rds", region_name=AWS_REGION)
+            db_id = arn.split(":")[-1]
+            try:
+                resp = rds.describe_db_instances(DBInstanceIdentifier=db_id)
+                dbs = resp.get('DBInstances', [])
+                if dbs:
+                    return dbs[0].get('DBInstanceStatus', 'unknown')
+                return 'not_found'
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'DBInstanceNotFound':
+                    return 'not_found'
+                return 'error'
+
+        # ELBv2
+        if service == "elasticloadbalancing":
+            elbv2 = boto3.client("elbv2", region_name=AWS_REGION)
+            try:
+                resp = elbv2.describe_load_balancers(LoadBalancerArns=[arn])
+                lbs = resp.get('LoadBalancers', [])
+                if lbs:
+                    return lbs[0].get('State', {}).get('Code', 'unknown')
+                return 'not_found'
+            except ClientError:
+                return 'error'
+
+        # SQS
+        if service == "sqs":
+            sqs = boto3.client("sqs", region_name=AWS_REGION)
+            q_name = arn.split(":")[-1]
+            try:
+                sqs.get_queue_url(QueueName=q_name)
+                return 'exists'
+            except ClientError as e:
+                code = e.response['Error']['Code']
+                if code in ('AWS.SimpleQueueService.NonExistentQueue', 'NonExistentQueue'):
+                    return 'not_found'
+                return 'error'
+
+        # SNS
+        if service == "sns":
+            sns = boto3.client("sns", region_name=AWS_REGION)
+            try:
+                sns.get_topic_attributes(TopicArn=arn)
+                return 'exists'
+            except ClientError as e:
+                code = e.response['Error']['Code']
+                if code == 'NotFound':
+                    return 'not_found'
+                return 'error'
+
+        # CloudWatch Logs
+        if service == "logs":
+            logs = boto3.client("logs", region_name=AWS_REGION)
+            try:
+                log_group = arn.split("log-group:")[-1].split(":")[0]
+                resp = logs.describe_log_groups(logGroupNamePrefix=log_group, limit=1)
+                groups = resp.get('logGroups', [])
+                if groups and groups[0].get('logGroupName') == log_group:
+                    return 'exists'
+                return 'not_found'
+            except ClientError:
+                return 'error'
+
+        # API Gateway (REST)
+        if service == "apigateway" and "/restapis/" in arn:
+            apigw = boto3.client("apigateway", region_name=AWS_REGION)
+            api_id = arn.split("/restapis/")[1].split("/")[0]
+            try:
+                apigw.get_rest_api(restApiId=api_id)
+                return 'exists'
+            except ClientError as e:
+                code = e.response['Error']['Code']
+                if code == 'NotFoundException':
+                    return 'not_found'
+                return 'error'
+
+    except Exception:
+        return 'error'
+
+    return 'unknown'

@@ -335,6 +335,7 @@ class CloudAdapterServicer(pb2_grpc.CloudAdapterServicer):
                     'service': res['service'],
                     'created_by': res['created_by'],
                     'resource_id': res['resource_id'],
+                    'status': res.get('status', 'unknown'),
                 }
                 grpc_item = pb2.ResourceDetail(**kwargs)
                 grpc_resources.append(grpc_item)
